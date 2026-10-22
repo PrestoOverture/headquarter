@@ -12,6 +12,9 @@ on:
       max_parallel:
         description: concurrent writer runs (they share one plan quota)
         default: "2"
+      model:
+        description: writer model (Sonnet saves quota; Opus for the real measurement)
+        default: claude-sonnet-5-5
 
 jobs:
   plan:
@@ -68,7 +71,7 @@ jobs:
         working-directory: eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: bun src/write.ts --tasks tasks/public.json --id "${{ matrix.id }}" --out results
+        run: bun src/write.ts --tasks tasks/public.json --id "${{ matrix.id }}" --out results --model "${{ inputs.model }}"
       - name: Upload writer output
         if: always()
         uses: actions/upload-artifact@v4

@@ -18,7 +18,8 @@ import { BlockProxy } from "./proxy";
 import { run, sh } from "./sh";
 import { findTask, type PublicTask } from "./tasks";
 
-export const MODEL = "claude-opus-5-5";
+// Sonnet by default to save plan quota; pass --model claude-opus-5-5 to measure Opus as the writer.
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
 export const EFFORT = "high";
 const RUN_CAP_MS = 60 * 60 * 1000;
 const WS_ROOT = "/tmp/ws"; // outside the repo: agents walk parent dirs for CLAUDE.md / AGENTS.md
@@ -30,7 +31,7 @@ const HEADLESS =
   "waiting for anything.";
 
 const CLAUDE = [
-  "claude", "-p", "--model", MODEL, "--effort", EFFORT,
+  "claude", "-p", "--effort", EFFORT,
   "--output-format", "stream-json", "--verbose",
   "--setting-sources", "", "--strict-mcp-config",
   "--permission-mode", "bypassPermissions",
@@ -116,8 +117,11 @@ export function promptFor(task: PublicTask, workdir: string, envrun: string): st
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { tasks: { type: "string" }, id: { type: "string" }, out: { type: "string" } } });
-  if (!values.tasks || !values.id || !values.out) throw new Error("usage: --tasks <file> --id <instance_id> --out <dir>");
+  const { values } = parseArgs({
+    options: { tasks: { type: "string" }, id: { type: "string" }, out: { type: "string" }, model: { type: "string", default: DEFAULT_MODEL } },
+  });
+  if (!values.tasks || !values.id || !values.out) throw new Error("usage: --tasks <file> --id <instance_id> --out <dir> [--model <id>]");
+  const model = values.model!;
   const tasks: PublicTask[] = JSON.parse(readFileSync(values.tasks, "utf8"));
   const task = findTask(tasks, values.id);
   const runDir = join(values.out, task.instance_id);
@@ -137,7 +141,7 @@ async function main() {
   let record: Record<string, unknown>;
   try {
     const { ws, envrun, base } = prepareWorkspace(task, opaque, alias, ctr);
-    const cmd = [...CLAUDE, promptFor(task, ws, envrun)];
+    const cmd = [...CLAUDE, "--model", model, promptFor(task, ws, envrun)];
     const logPath = join(runDir, "agent.jsonl");
     const outcome = await runAgent(cmd, ws, logPath, agentEnv(opaque, proxy.url));
     const log = readFileSync(logPath, "utf8");
@@ -152,7 +156,7 @@ async function main() {
     const files = patchFiles(patch);
     record = {
       instance_id: task.instance_id,
-      model: MODEL,
+      model,
       effort: EFFORT,
       ...outcome,
       patch_files: files,
