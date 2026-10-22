@@ -16,10 +16,11 @@ import { findTask, readTasks, type Task } from "./tasks";
 
 const RERUNS = 2;
 const CMD_TIMEOUT_MS = 30 * 60 * 1000;
+const REBUILD_TIMEOUT_MS = 90 * 60 * 1000; // a full duckdb rebuild after the gold patch took over 30 minutes
 const SCRIPT_TIMEOUT_S = 25 * 60; // the prompt promises 20 minutes
 
-function exec(ctr: string, cmd: string, input?: string) {
-  return run(["docker", "exec", "-i", "-w", "/testbed", ctr, "bash", "-c", cmd], { input, timeoutMs: CMD_TIMEOUT_MS });
+function exec(ctr: string, cmd: string, input?: string, timeoutMs = CMD_TIMEOUT_MS) {
+  return run(["docker", "exec", "-i", "-w", "/testbed", ctr, "bash", "-c", cmd], { input, timeoutMs });
 }
 
 /** git apply, falling back to a fuzzy `patch` like the SWE-bench harness. */
@@ -50,9 +51,14 @@ function gradeSide(task: Task, writerPatch: string, fixed: boolean, logPath: str
     }
     side.applied = true;
     for (const cmd of task.rebuild_cmds) {
-      const r = exec(ctr, cmd);
+      const r = exec(ctr, cmd, undefined, REBUILD_TIMEOUT_MS);
+      if (r.timedOut) side.rebuild_timed_out = true;
       lines.push(`## rebuild\n$ ${cmd}\n[exit ${r.code}${r.timedOut ? ", timeout" : ""}]\n${r.out}`);
     }
+    // The writer ran its tests with no network; so do we. With network, NuGet's
+    // vulnerability audit turned warnings into errors that the writer never saw.
+    const net = run(["docker", "network", "disconnect", "bridge", ctr]);
+    lines.push(`## network disconnect\n[exit ${net.code}]\n${net.out}`);
     for (let i = 1; i <= RERUNS; i++) {
       const r = exec(ctr, `${task.env_activate} && timeout ${SCRIPT_TIMEOUT_S} bash ${SCRIPT}`);
       const code = r.timedOut || r.code === 124 ? -1 : r.code;

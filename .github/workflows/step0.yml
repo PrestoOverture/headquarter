@@ -2,6 +2,7 @@ name: step0
 # Roadmap 第 0 步: test the test writer on post-cutoff SWE-bench-Live/MultiLang tasks.
 # write: Claude writes tests for each issue, without the gold data (stripped before the
 # agent starts). grade: the tests run on the buggy and the fixed code. summarize: catch rate.
+# With writer_runs set, the write job is skipped and grade reuses those runs' writer output.
 
 on:
   workflow_dispatch:
@@ -15,6 +16,9 @@ on:
       model:
         description: writer model (Sonnet saves quota; Opus for the real measurement)
         default: claude-sonnet-5-5
+      writer_runs:
+        description: grade only, using writer output from these run ids (space-separated)
+        default: ""
 
 jobs:
   plan:
@@ -36,6 +40,7 @@ jobs:
 
   write:
     needs: plan
+    if: inputs.writer_runs == ''
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -45,21 +50,11 @@ jobs:
         id: ${{ fromJSON(needs.plan.outputs.ids) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        run: bash eval/scripts/free-disk.sh
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/share/swift /usr/local/.ghcup /opt/az /opt/microsoft /opt/google
-          docker system prune -af >/dev/null
-          # large task images (~30 GB): put Docker's storage on the bigger of / and /mnt
-          if [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ]; then
-            sudo systemctl stop docker docker.socket
-            echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
-            sudo systemctl start docker
-          fi
-          df -h / /mnt
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code@2.1.281
       - name: Task file without gold data
@@ -84,7 +79,7 @@ jobs:
     needs: [plan, write]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       max-parallel: 20
@@ -92,26 +87,26 @@ jobs:
         id: ${{ fromJSON(needs.plan.outputs.ids) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        run: bash eval/scripts/free-disk.sh
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-            /usr/local/share/powershell /usr/local/share/chromium /usr/share/swift /usr/local/.ghcup /opt/az /opt/microsoft /opt/google
-          docker system prune -af >/dev/null
-          # large task images (~30 GB): put Docker's storage on the bigger of / and /mnt
-          if [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ]; then
-            sudo systemctl stop docker docker.socket
-            echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
-            sudo systemctl start docker
-          fi
-          df -h / /mnt
       - uses: actions/download-artifact@v4
+        if: inputs.writer_runs == ''
         continue-on-error: true # a crashed writer job uploads nothing; there is nothing to grade then
         with:
           name: write-${{ matrix.id }}
           path: eval/results/
+      - name: Writer output from earlier runs
+        if: inputs.writer_runs != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ inputs.writer_runs }}
+        run: |
+          for run in $RUNS; do
+            gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-${{ matrix.id }}" -D eval/results/ 2>/dev/null && break
+          done
       - name: Grade
         working-directory: eval
         run: |

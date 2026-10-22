@@ -6,6 +6,7 @@ export const SCRIPT = ".step0/run_tests.sh";
 export type Side = {
   applied: boolean; // writer patch (and, on the fixed side, the gold patch) applied
   runs: number[]; // exit codes of the writer's script, one per rerun; -1 = timeout
+  rebuild_timed_out?: boolean;
 };
 
 export type Verdict =
@@ -16,7 +17,8 @@ export type Verdict =
   | "no_submission" // empty patch
   | "no_script" // patch without .step0/run_tests.sh
   | "touches_fix" // writer changed a file the gold fix changes
-  | "patch_failed"; // writer patch does not apply
+  | "patch_failed" // writer patch does not apply
+  | "grade_error"; // the project's rebuild timed out: says nothing about the tests
 
 /** Files a unified diff touches (the b/ side). */
 export function patchFiles(patch: string): string[] {
@@ -30,6 +32,7 @@ export function verdict(writerPatch: string, goldPatch: string, buggy: Side | nu
   const gold = new Set(patchFiles(goldPatch));
   if (files.some((f) => gold.has(f))) return "touches_fix";
   if (!buggy?.applied || !fixed?.applied) return "patch_failed";
+  if (buggy.rebuild_timed_out || fixed.rebuild_timed_out) return "grade_error";
   const pass = (c: number) => c === 0;
   const consistent = (s: Side) => new Set(s.runs.map(pass)).size === 1;
   if (!consistent(buggy) || !consistent(fixed)) return "flaky";

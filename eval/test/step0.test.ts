@@ -141,3 +141,16 @@ test("build outputs stay out of the writer patch, new tests and fixtures stay in
   const patch = git("diff", "--cached", "--binary", "HEAD", "--", ".", ...buildOutputExcludes(modified)).out;
   expect(patchFiles(patch).sort()).toEqual([SCRIPT, "tree/test/fixture.bin", "tree/test/new_test.cxx"]);
 });
+
+test("a rebuild timeout is a grade error, not a miss", () => {
+  expect(verdict(WRITER, GOLD, side(1, 1), { applied: true, runs: [127, 127], rebuild_timed_out: true })).toBe("grade_error");
+  const s = summarize(
+    [
+      { instance_id: "a", language: "c", verdict: "caught" },
+      { instance_id: "b", language: "c", verdict: "grade_error" },
+    ],
+    [],
+  );
+  expect(s.graded).toBe(1);
+  expect(s.catch_rate).toBe(1);
+});

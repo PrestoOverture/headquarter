@@ -1,6 +1,7 @@
 // Catch rate over every graded task (roadmap 第 0 步 stop line: below half, fix the writer
 // before moving on). Invalid submissions count as misses: the writer failed to produce a
-// usable test. Tasks with no report (writer or grade job crashed) are listed, not counted.
+// usable test. Tasks with no report (writer or grade job crashed) or a grade_error are
+// listed, not counted.
 //
 //   bun src/summarize.ts <results dir>    → summary.json in that dir, Markdown on stdout
 
@@ -14,11 +15,12 @@ export function summarize(reports: Report[], missing: string[]) {
   const counts: Partial<Record<Verdict, number>> = {};
   for (const r of reports) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
   const caught = counts.caught ?? 0;
+  const graded = reports.length - (counts.grade_error ?? 0);
   return {
-    graded: reports.length,
+    graded,
     caught,
-    catch_rate: reports.length ? caught / reports.length : null,
-    passes_stop_line: reports.length ? caught / reports.length >= 0.5 : null,
+    catch_rate: graded ? caught / graded : null,
+    passes_stop_line: graded ? caught / graded >= 0.5 : null,
     counts,
     missing,
     by_task: Object.fromEntries(reports.map((r) => [r.instance_id, r.verdict])),
