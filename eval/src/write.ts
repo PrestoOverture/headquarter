@@ -104,6 +104,27 @@ export function claudeResult(log: string): Record<string, unknown> | null {
   return Object.fromEntries(keep.map((k) => [k, result![k]]));
 }
 
+// The sanitized base commits every file the repo does not ignore, so a build dir that is
+// not in .gitignore shows up in the diff once the writer's test runs rebuild it.
+export const BUILD_DIRS = ["build", "target", "node_modules", "obj", "CMakeFiles", "dist", ".gradle"];
+
+/** Paths `git diff --numstat` reports as binary ("-\t-\tpath"). */
+export function binaryPaths(numstat: string): string[] {
+  return [...numstat.matchAll(/^-\t-\t(.+)$/gm)].map((m) => m[1]!);
+}
+
+/**
+ * Pathspecs that keep build outputs out of the writer patch: everything under a build
+ * dir, and binaries that already existed at base (rebuilt objects). A binary the writer
+ * adds, such as a test fixture, stays.
+ */
+export function buildOutputExcludes(modifiedBinaries: string[]): string[] {
+  return [
+    ...BUILD_DIRS.flatMap((d) => [`:(exclude,glob)${d}/**`, `:(exclude,glob)**/${d}/**`]),
+    ...modifiedBinaries.map((f) => `:(exclude,literal)${f}`),
+  ];
+}
+
 export function promptFor(task: PublicTask, workdir: string, envrun: string): string {
   const template = readFileSync(join(import.meta.dir, "writer_prompt.md"), "utf8");
   const vars: Record<string, string> = {
@@ -151,15 +172,19 @@ async function main() {
     // The container writes into the bind mount as root; take ownership back for git.
     run(["sudo", "-n", "chown", "-R", `${process.getuid!()}:${process.getgid!()}`, ws]);
     sh(["git", "add", "-A"], { cwd: ws });
-    const patch = sh(["git", "diff", "--cached", "--binary", base], { cwd: ws });
+    const changed = sh(["git", "diff", "--cached", "--name-only", base], { cwd: ws }).split("\n").filter(Boolean);
+    const modifiedBinaries = binaryPaths(sh(["git", "diff", "--cached", "--numstat", "--diff-filter=M", base], { cwd: ws }));
+    const patch = sh(["git", "diff", "--cached", "--binary", base, "--", ".", ...buildOutputExcludes(modifiedBinaries)], { cwd: ws });
     writeFileSync(join(runDir, "writer.patch"), patch);
     const files = patchFiles(patch);
+    const dropped = changed.filter((f) => !files.includes(f));
     record = {
       instance_id: task.instance_id,
       model,
       effort: EFFORT,
       ...outcome,
       patch_files: files,
+      dropped_build_outputs: dropped,
       has_script: files.includes(SCRIPT),
       claude: claudeResult(log),
     };

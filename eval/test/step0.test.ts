@@ -5,7 +5,10 @@ import { BLOCKED, BlockProxy, target } from "../src/proxy";
 import { run } from "../src/sh";
 import { summarize } from "../src/summarize";
 import { keptTasks, PUBLIC_FIELDS, stripGold } from "../src/tasks";
-import { claudeResult, promptFor } from "../src/write";
+import { binaryPaths, buildOutputExcludes, claudeResult, promptFor } from "../src/write";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const diff = (...files: string[]) => files.map((f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n`).join("");
 const GOLD = diff("src/lib.rs");
@@ -111,4 +114,30 @@ test("summarize: invalid submissions count as misses", () => {
 test("run merges output and reports timeouts", () => {
   expect(run(["bash", "-c", "echo a; echo b >&2; exit 3"])).toEqual({ code: 3, out: "a\nb\n", timedOut: false });
   expect(run(["sleep", "5"], { timeoutMs: 200 }).timedOut).toBe(true);
+});
+
+test("build outputs stay out of the writer patch, new tests and fixtures stay in", () => {
+  const ws = mkdtempSync(join(tmpdir(), "step0-"));
+  const git = (...a: string[]) => run(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: ws });
+  const put = (f: string, data: string | Uint8Array) => {
+    mkdirSync(join(ws, f, ".."), { recursive: true });
+    writeFileSync(join(ws, f), data);
+  };
+  put("src/lib.c", "int f;\n");
+  put("build/test/t.o", new Uint8Array([0, 1, 2]));
+  put("tree/test/old.o", new Uint8Array([0, 1, 2]));
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  put("build/test/t.o", new Uint8Array([0, 9, 9])); // rebuilt under a build dir
+  put("build/.ninja_log", "log\n");
+  put("tree/test/old.o", new Uint8Array([0, 7, 7])); // rebuilt binary outside a build dir
+  put("tree/test/new_test.cxx", "TEST() {}\n");
+  put("tree/test/fixture.bin", new Uint8Array([0, 5])); // new binary fixture
+  put(SCRIPT, "#!/bin/bash\n");
+  git("add", "-A");
+  const modified = binaryPaths(git("diff", "--cached", "--numstat", "--diff-filter=M", "HEAD").out);
+  expect(modified.sort()).toEqual(["build/test/t.o", "tree/test/old.o"]);
+  const patch = git("diff", "--cached", "--binary", "HEAD", "--", ".", ...buildOutputExcludes(modified)).out;
+  expect(patchFiles(patch).sort()).toEqual([SCRIPT, "tree/test/fixture.bin", "tree/test/new_test.cxx"]);
 });
