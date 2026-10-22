@@ -1,0 +1,145 @@
+name: step0
+# Roadmap 第 0 步: test the test writer on post-cutoff SWE-bench-Live/MultiLang tasks.
+# write: Claude writes tests for each issue, without the gold data (stripped before the
+# agent starts). grade: the tests run on the buggy and the fixed code. summarize: catch rate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: JSON array of instance ids (empty = all 61)
+        default: ""
+      max_parallel:
+        description: concurrent writer runs (they share one plan quota)
+        default: "2"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - id: ids
+        working-directory: eval
+        env:
+          IDS: ${{ inputs.ids }}
+        run: |
+          if [ -z "$IDS" ]; then IDS=$(bun src/tasks.ts ids tasks/tasks.json.gz); fi
+          echo "ids=$IDS" >> "$GITHUB_OUTPUT"
+
+  write:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
+      matrix:
+        id: ${{ fromJSON(needs.plan.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/share/powershell /usr/local/share/chromium /usr/share/swift /usr/local/.ghcup /opt/az /opt/microsoft /opt/google
+          docker system prune -af >/dev/null
+          # large task images (~30 GB): put Docker's storage on the bigger of / and /mnt
+          if [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ]; then
+            sudo systemctl stop docker docker.socket
+            echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+            sudo systemctl start docker
+          fi
+          df -h / /mnt
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.281
+      - name: Task file without gold data
+        working-directory: eval
+        run: |
+          bun src/tasks.ts strip tasks/tasks.json.gz tasks/public.json
+          rm tasks/tasks.json.gz
+      - name: Write tests
+        working-directory: eval
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: bun src/write.ts --tasks tasks/public.json --id "${{ matrix.id }}" --out results
+      - name: Upload writer output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: write-${{ matrix.id }}
+          path: eval/results/
+          if-no-files-found: warn
+
+  grade:
+    needs: [plan, write]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        id: ${{ fromJSON(needs.plan.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/share/powershell /usr/local/share/chromium /usr/share/swift /usr/local/.ghcup /opt/az /opt/microsoft /opt/google
+          docker system prune -af >/dev/null
+          # large task images (~30 GB): put Docker's storage on the bigger of / and /mnt
+          if [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ]; then
+            sudo systemctl stop docker docker.socket
+            echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+            sudo systemctl start docker
+          fi
+          df -h / /mnt
+      - uses: actions/download-artifact@v4
+        continue-on-error: true # a crashed writer job uploads nothing; there is nothing to grade then
+        with:
+          name: write-${{ matrix.id }}
+          path: eval/results/
+      - name: Grade
+        working-directory: eval
+        run: |
+          if [ ! -f "results/${{ matrix.id }}/write.json" ]; then echo "no writer output"; exit 1; fi
+          bun src/grade.ts --tasks tasks/tasks.json.gz --id "${{ matrix.id }}" --results results
+      - name: Upload graded run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: graded-${{ matrix.id }}
+          path: eval/results/
+          if-no-files-found: warn
+
+  summarize:
+    needs: [plan, grade]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: graded-*
+          merge-multiple: true
+          path: eval/results/
+      - name: Catch rate
+        working-directory: eval
+        run: bun src/summarize.ts results | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step0-results
+          path: eval/results/
