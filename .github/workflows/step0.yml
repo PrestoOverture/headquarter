@@ -20,6 +20,10 @@ on:
         description: grade only, using writer output from these run ids (space-separated)
         default: ""
 
+permissions:
+  actions: read # grade-only runs download writer artifacts from earlier runs
+  contents: read
+
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -105,8 +109,10 @@ jobs:
           RUNS: ${{ inputs.writer_runs }}
         run: |
           for run in $RUNS; do
-            gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-${{ matrix.id }}" -D eval/results/ 2>/dev/null && break
+            echo "trying run $run"
+            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-${{ matrix.id }}" -D eval/results/; then exit 0; fi
           done
+          echo "no writer output in: $RUNS"; exit 1
       - name: Grade
         working-directory: eval
         run: |
