@@ -33,7 +33,7 @@ eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、�
   src/disk.ts         拉镜像前的磁盘预检：镜像压缩层大小（registry manifest）× 2.5 对 Docker data root 的剩余空间，放不下判 `excluded_disk`（不进抓住率的分子分母，汇总里列出数字）；workflow 的 `runner` 输入选更大的 runner
   src/mutants.ts      变异测试：金标准补丁每次去掉一个 hunk 得一个变异体（至多 8 个）；`grade.ts --mutants` 对抓住的题逐个判，summarize 出变异得分
   src/writer_prompt_v2.md  出题提示词第二版（`write.ts --prompt v2`，默认 v1）；A/B 用法见 `ab/README.md`
-scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查
+scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查；`codex-check.ts` 在 srt 里跑 `codex exec` 做同样的探测（tech_stacks 待核实）
 docs/                 设计、路线、历史
 goals/<目标>.json      目标分支上的目标文件：title、shelved（搁置的任务）、known_issues（既有问题）；报告从这里读
 ```

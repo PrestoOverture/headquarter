@@ -23,7 +23,7 @@ export const EXPECTED = [
   "home_write", "ssh_read", "net_direct", "net_proxy",
 ];
 
-function git(args: string[], cwd: string): string {
+export function git(args: string[], cwd: string): string {
   const p = Bun.spawnSync(["git", ...args], { cwd });
   if (p.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${p.stderr.toString()}`);
   return p.stdout.toString().trim();
@@ -78,7 +78,7 @@ export function verdicts(lines: string[]): Map<string, string> {
   return v;
 }
 
-function hooksSnapshot(commonDir: string): string {
+export function hooksSnapshot(commonDir: string): string {
   const dir = join(commonDir, "hooks");
   return existsSync(dir) ? readdirSync(dir).sort().join(",") : "";
 }
