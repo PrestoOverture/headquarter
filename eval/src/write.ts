@@ -64,10 +64,17 @@ function prepareWorkspace(task: PublicTask, dir: string, image: string, ctr: str
   return { ws, envrun, base };
 }
 
-function agentEnv(home: string, proxyUrl: string): Record<string, string> {
+// The workflow hands its inputs to this process as STEP0_* variables; none may reach the agent.
+export const WORKFLOW_ENV_PREFIX = "STEP0_";
+
+export function agentEnv(home: string, proxyUrl: string, instanceId: string, source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const drop = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]);
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !drop.has(k)) env[k] = v;
+  for (const [k, v] of Object.entries(source)) {
+    // A value that contains the instance id would give away the upstream PR number.
+    if (v === undefined || drop.has(k) || k.startsWith(WORKFLOW_ENV_PREFIX) || v.includes(instanceId)) continue;
+    env[k] = v;
+  }
   mkdirSync(join(home, "gh-empty"), { recursive: true });
   env.GH_CONFIG_DIR = join(home, "gh-empty");
   env.GIT_TERMINAL_PROMPT = "0";
@@ -125,8 +132,17 @@ export function buildOutputExcludes(modifiedBinaries: string[]): string[] {
   ];
 }
 
-export function promptFor(task: PublicTask, workdir: string, envrun: string): string {
-  const template = readFileSync(join(import.meta.dir, "writer_prompt.md"), "utf8");
+// v1 is the prompt step 0's runs used; it stays the default so new runs stay comparable.
+export const PROMPT_FILES = { v1: "writer_prompt.md", v2: "writer_prompt_v2.md" } as const;
+export type PromptVersion = keyof typeof PROMPT_FILES;
+
+export function promptVersion(value: string): PromptVersion {
+  if (!Object.hasOwn(PROMPT_FILES, value)) throw new Error(`--prompt must be one of ${Object.keys(PROMPT_FILES).join(", ")}, got "${value}"`);
+  return value as PromptVersion;
+}
+
+export function promptFor(task: PublicTask, workdir: string, envrun: string, version: PromptVersion = "v1"): string {
+  const template = readFileSync(join(import.meta.dir, PROMPT_FILES[version]), "utf8");
   const vars: Record<string, string> = {
     repo: task.repo,
     workdir,
@@ -137,12 +153,24 @@ export function promptFor(task: PublicTask, workdir: string, envrun: string): st
   return template.replace(/\{(\w+)\}/g, (m, k) => vars[k] ?? m);
 }
 
+/** The head of write.json: who wrote with what; the run outcome follows. */
+export function writeRecord(task: PublicTask, model: string, prompt: PromptVersion, fields: Record<string, unknown>) {
+  return { instance_id: task.instance_id, model, prompt, effort: EFFORT, ...fields };
+}
+
 async function main() {
   const { values } = parseArgs({
-    options: { tasks: { type: "string" }, id: { type: "string" }, out: { type: "string" }, model: { type: "string", default: DEFAULT_MODEL } },
+    options: {
+      tasks: { type: "string" },
+      id: { type: "string" },
+      out: { type: "string" },
+      model: { type: "string", default: DEFAULT_MODEL },
+      prompt: { type: "string", default: "v1" },
+    },
   });
-  if (!values.tasks || !values.id || !values.out) throw new Error("usage: --tasks <file> --id <instance_id> --out <dir> [--model <id>]");
+  if (!values.tasks || !values.id || !values.out) throw new Error("usage: --tasks <file> --id <instance_id> --out <dir> [--model <id>] [--prompt v1|v2]");
   const model = values.model!;
+  const prompt = promptVersion(values.prompt!);
   const tasks: PublicTask[] = JSON.parse(readFileSync(values.tasks, "utf8"));
   const task = findTask(tasks, values.id);
   const runDir = join(values.out, task.instance_id);
@@ -162,9 +190,9 @@ async function main() {
   let record: Record<string, unknown>;
   try {
     const { ws, envrun, base } = prepareWorkspace(task, opaque, alias, ctr);
-    const cmd = [...CLAUDE, "--model", model, promptFor(task, ws, envrun)];
+    const cmd = [...CLAUDE, "--model", model, promptFor(task, ws, envrun, prompt)];
     const logPath = join(runDir, "agent.jsonl");
-    const outcome = await runAgent(cmd, ws, logPath, agentEnv(opaque, proxy.url));
+    const outcome = await runAgent(cmd, ws, logPath, agentEnv(opaque, proxy.url, task.instance_id));
     const log = readFileSync(logPath, "utf8");
     // Not a writer outcome: leave no write.json so the task can be rerun.
     if (log.includes('"error":"authentication_failed"')) throw new Error("claude could not authenticate");
@@ -178,16 +206,13 @@ async function main() {
     writeFileSync(join(runDir, "writer.patch"), patch);
     const files = patchFiles(patch);
     const dropped = changed.filter((f) => !files.includes(f));
-    record = {
-      instance_id: task.instance_id,
-      model,
-      effort: EFFORT,
+    record = writeRecord(task, model, prompt, {
       ...outcome,
       patch_files: files,
       dropped_build_outputs: dropped,
       has_script: files.includes(SCRIPT),
       claude: claudeResult(log),
-    };
+    });
   } finally {
     proxy.close();
     run(["docker", "rm", "-f", ctr]);

@@ -5,8 +5,8 @@ import { BLOCKED, BlockProxy, target } from "../src/proxy";
 import { run } from "../src/sh";
 import { summarize } from "../src/summarize";
 import { keptTasks, PUBLIC_FIELDS, stripGold } from "../src/tasks";
-import { binaryPaths, buildOutputExcludes, claudeResult, promptFor } from "../src/write";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { agentEnv, binaryPaths, buildOutputExcludes, claudeResult, promptFor, promptVersion, writeRecord } from "../src/write";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -153,4 +153,110 @@ test("a rebuild timeout is a grade error, not a miss", () => {
   );
   expect(s.graded).toBe(1);
   expect(s.catch_rate).toBe(1);
+});
+
+describe("writer prompt versions", () => {
+  const task = () => stripGold(keptTasks(new URL("../tasks/tasks.json.gz", import.meta.url).pathname)[0]!);
+  const v1 = () => promptFor(task(), "/tmp/ws/x/testbed", "/tmp/ws/x/bin/envrun");
+  const v2 = () => promptFor(task(), "/tmp/ws/x/testbed", "/tmp/ws/x/bin/envrun", "v2");
+
+  test("v1 is the default and is the prompt file step 0 used", () => {
+    expect(v1()).toBe(promptFor(task(), "/tmp/ws/x/testbed", "/tmp/ws/x/bin/envrun", "v1"));
+    expect(v1()).not.toBe(v2());
+  });
+  test("v2 fills every placeholder", () => {
+    const t = task();
+    const p = v2();
+    expect(p).not.toMatch(/\{(repo|workdir|envrun|rebuild_cmds|problem_statement)\}/);
+    expect(p).toContain(t.repo);
+    expect(p).toContain("/tmp/ws/x/testbed");
+    expect(p).toContain("/tmp/ws/x/bin/envrun");
+    expect(p).toContain(t.rebuild_cmds[0]!);
+    expect(p).toContain(t.problem_statement);
+  });
+  test("v2 keeps v1's text and adds the four rules", () => {
+    const template = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    const [one, two] = [template("writer_prompt.md"), template("writer_prompt_v2.md")];
+    for (const line of one.split("\n").filter(Boolean)) expect(two).toContain(line);
+    expect(two).toContain("Assert only the behavior the issue describes");
+    expect(two).toContain("`1` versus `1.0`");
+    expect(two).toContain("Do not extend its reproduction");
+    expect(two).toContain("public interfaces");
+    expect(two).toContain("Never guess an internal");
+    expect(two).toContain("available offline in the container");
+  });
+  test("--prompt accepts v1 and v2 only", () => {
+    expect(promptVersion("v1")).toBe("v1");
+    expect(promptVersion("v2")).toBe("v2");
+    for (const bad of ["v3", "", "toString", "__proto__"]) expect(() => promptVersion(bad)).toThrow("--prompt must be one of v1, v2");
+    const r = run(["bun", "src/write.ts", "--tasks", "t.json", "--id", "x", "--out", "o", "--prompt", "v3"], { cwd: new URL("..", import.meta.url).pathname });
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("--prompt must be one of v1, v2");
+  });
+  test("write.json records the prompt version", () => {
+    const rec = writeRecord(task(), "claude-sonnet-5-5", "v2", { exit_code: 0 });
+    expect(rec).toMatchObject({ instance_id: task().instance_id, model: "claude-sonnet-5-5", prompt: "v2", exit_code: 0 });
+    expect(Object.keys(rec).slice(0, 3)).toEqual(["instance_id", "model", "prompt"]);
+  });
+  test("the step0 workflow passes a prompt input, default v1, to write.ts", () => {
+    const wf = readFileSync(new URL("../../.github/workflows/step0.yml", import.meta.url), "utf8");
+    expect(wf).toMatch(/\n {6}prompt:\n(?: {8}.*\n)*? {8}default: v1\n/);
+    expect(wf).toMatch(/\n {6}prompt:\n(?: {8}.*\n)*? {8}type: choice\n(?: {8}.*\n)*? {8}options: \[v1, v2\]\n/);
+    const step = wf.split("      - name: Write tests\n")[1].split("\n      - ")[0];
+    expect(step).toContain("STEP0_PROMPT: ${{ inputs.prompt }}");
+    expect(step).toContain("STEP0_MODEL: ${{ inputs.model }}");
+    expect(step).toContain("STEP0_ID: ${{ matrix.id }}");
+    expect(step).toContain('--id "$STEP0_ID"');
+    expect(step).toContain('--model "$STEP0_MODEL"');
+    expect(step).toContain('--prompt "$STEP0_PROMPT"');
+  });
+  test("every variable a step0 workflow step sets for its script, except secrets, has the STEP0_ prefix", () => {
+    const wf = readFileSync(new URL("../../.github/workflows/step0.yml", import.meta.url), "utf8");
+    const names = [...wf.matchAll(/^ {10}([A-Z][A-Z0-9_]*): \$\{\{/gm)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter((n) => !n.startsWith("STEP0_") && !["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"].includes(n))).toEqual([]);
+    expect(wf).not.toMatch(/^ {10}(ID|IDS|RUNS|MODEL|PROMPT):/m);
+  });
+  test("no run script in the step0 workflow interpolates inputs or matrix values", () => {
+    const wf = readFileSync(new URL("../../.github/workflows/step0.yml", import.meta.url), "utf8");
+    const lines = wf.split("\n");
+    const offenders: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^( *)(?:- )?run:(.*)$/);
+      if (!m) continue;
+      const indent = m[1].length;
+      const script = [m[2]];
+      if (/^\s*[|>][-+]?\s*$/.test(m[2])) {
+        script.length = 0;
+        for (let j = i + 1; j < lines.length && (lines[j].trim() === "" || lines[j].search(/\S/) > indent); j++) script.push(lines[j]);
+      }
+      for (const l of script) if (/\$\{\{\s*(inputs|matrix)\./.test(l)) offenders.push(l.trim());
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("agentEnv", () => {
+  const id = "owner__repo-4242";
+  const env = (source: Record<string, string>) => agentEnv(mkdtempSync(join(tmpdir(), "agentenv-")), "http://127.0.0.1:1", id, source);
+
+  test("drops every STEP0_ variable", () => {
+    const e = env({ PATH: "/usr/bin", STEP0_ID: id, STEP0_MODEL: "m", STEP0_PROMPT: "v2", STEP0_ANYTHING: "x" });
+    expect(Object.keys(e).filter((k) => k.startsWith("STEP0_"))).toEqual([]);
+    expect(e.PATH).toBe("/usr/bin");
+  });
+  test("drops any variable whose value contains the instance id", () => {
+    const e = env({ PATH: "/usr/bin", LEAK: id, WRAPPED: `x=${id}/y`, OTHER: "owner__repo-4243" });
+    expect(Object.values(e).filter((v) => v.includes(id))).toEqual([]);
+    expect(e.LEAK).toBeUndefined();
+    expect(e.WRAPPED).toBeUndefined();
+    expect(e.OTHER).toBe("owner__repo-4243");
+  });
+  test("still drops GitHub tokens and points the proxies at the block proxy", () => {
+    const e = env({ GH_TOKEN: "t", GITHUB_TOKEN: "t", CLAUDE_CODE_OAUTH_TOKEN: "keep" });
+    expect(e.GH_TOKEN).toBeUndefined();
+    expect(e.GITHUB_TOKEN).toBeUndefined();
+    expect(e.CLAUDE_CODE_OAUTH_TOKEN).toBe("keep");
+    expect(e.HTTPS_PROXY).toBe("http://127.0.0.1:1");
+  });
 });
