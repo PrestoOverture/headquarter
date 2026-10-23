@@ -23,7 +23,7 @@
 //   hq escape <task> --note <text>
 //   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>]
 
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
 import { git, revParse } from "./git";
@@ -39,7 +39,11 @@ import { render as renderStatus, status } from "./status";
 
 /** Where approve shows the report and the prompt; tests pass their own so the suite stays quiet. */
 export type Writer = (text: string) => void;
-const writeStderr: Writer = (text) => void process.stderr.write(text);
+// Synchronous, so a long report is fully out before the terminal read blocks.
+const writeStderr: Writer = (text) => {
+  const buf = Buffer.from(text);
+  for (let off = 0; off < buf.length; ) off += writeSync(2, buf, off);
+};
 
 /** One line typed on the controlling terminal. An agent's shell has none, so it cannot answer. */
 export function readTerminalLine(prompt: string, out: Writer = writeStderr): string {

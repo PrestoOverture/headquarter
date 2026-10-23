@@ -119,17 +119,17 @@ test("long test output is cut to its tail, with the full log's path", () => {
   const out = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join("\n");
   const md = renderReport({
     goal: "x", head: "a".repeat(40), base: "b".repeat(40), trialMerge: "c".repeat(40), tasks: [], testCommand: "t", testCode: 0,
-    testOutput: out, logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
+    testOut: out, testErr: "", logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
   });
   expect(md).toContain("line 999");
   expect(md).not.toContain("line 699\n");
   expect(md).toContain("前面 700 行在 `/logs/x.test.log`");
 });
 
-function mdFor(testOutput: string) {
+function mdFor(testOut: string, testErr = "") {
   return renderReport({
     goal: "x", head: "a".repeat(40), base: "b".repeat(40), trialMerge: "c".repeat(40), tasks: [], testCommand: "t", testCode: 0,
-    testOutput, logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
+    testOut, testErr, logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
   });
 }
 const block = (md: string) => md.split("```text\n")[1]!.split("\n```")[0]!;
@@ -147,6 +147,28 @@ test("OSC sequences are removed, ended by BEL or by ESC \\", () => {
 test("a line rewritten with \\r shows its final text; CRLF ends are just line ends", () => {
   const out = "progress 10%\rprogress 50%\rprogress 100%\ndone\r\nlong line here\r\x1b[Kshort\n";
   expect(block(mdFor(out))).toBe("progress 100%\ndone\nshort");
+});
+
+test("\\r overwrites column by column; characters it does not reach stay", () => {
+  expect(cleanTerminal("long\rab")).toBe("abng");
+  expect(cleanTerminal("abcdef\rxy")).toBe("xycdef");
+  expect(cleanTerminal("WARN: 40 tests skipped\rok")).toBe("okRN: 40 tests skipped");
+  expect(cleanTerminal("abc\r\r\rx\ry\n")).toBe("ybc\n");
+});
+
+test("erase-in-line applies at the cursor, combined with \\r", () => {
+  expect(cleanTerminal("abcdef\rxy\x1b[K")).toBe("xy");
+  expect(cleanTerminal("abcdef\rxy\x1b[0K")).toBe("xy");
+  expect(cleanTerminal("abcdef\rxy\x1b[1K")).toBe("   def");
+  expect(cleanTerminal("abcdef\rxy\x1b[2K")).toBe("");
+  expect(cleanTerminal("abcdef\rxy\x1b[2Kz")).toBe("  z");
+  expect(cleanTerminal("abcdef\r\x1b[2Kz")).toBe("z");
+  expect(cleanTerminal("abcdef\r\x1b[Kz\n")).toBe("z\n");
+});
+
+test("stdout without a final newline and stderr opening with \\r stay apart", () => {
+  expect(block(mdFor("running 3 tests", "\r\x1b[2Kwarning: slow\n"))).toBe("running 3 tests\nwarning: slow");
+  expect(block(mdFor("a\n", "b\n"))).toBe("a\nb");
 });
 
 test("text that merely looks like a prompt or a verdict stays in the block", () => {

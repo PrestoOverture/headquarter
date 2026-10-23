@@ -114,17 +114,49 @@ export function newKinds(cwd: string, added: string[]): string[] {
 }
 
 // CSI: ESC [ parameter bytes, intermediate bytes, final byte. OSC: ESC ] text, ended by BEL or ESC \.
-const CSI = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g;
-const OSC = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)/g;
+const ESCAPE = /\x1b\[([\x30-\x3f]*)([\x20-\x2f]*)([\x40-\x7e])|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)/y;
 
-/** Test output as a person saw it: escape sequences gone, each \r-rewritten line down to its final text. Nothing else changes. */
+/** One line as a terminal ends up showing it: \r returns to column 0, later characters overwrite, erase-in-line applies. */
+function cleanLine(line: string): string {
+  if (!line.includes("\x1b") && !line.includes("\r")) return line;
+  const cells: string[] = [];
+  let col = 0;
+  for (let i = 0; i < line.length; ) {
+    if (line[i] === "\x1b") {
+      ESCAPE.lastIndex = i;
+      const m = ESCAPE.exec(line);
+      if (m) {
+        if (m[3] === "K" && m[2] === "") {
+          if (m[1] === "" || m[1] === "0") cells.length = Math.min(cells.length, col);
+          else if (m[1] === "1") for (let j = 0; j <= col && j < cells.length; j++) cells[j] = " ";
+          else if (m[1] === "2") cells.length = 0;
+        }
+        i += m[0].length;
+        continue;
+      }
+    }
+    if (line[i] === "\r") {
+      col = 0;
+      i++;
+      continue;
+    }
+    const ch = String.fromCodePoint(line.codePointAt(i)!);
+    while (cells.length < col) cells.push(" ");
+    cells[col++] = ch;
+    i += ch.length;
+  }
+  return cells.join("");
+}
+
+/** Test output as a person saw it: escape sequences gone, each line down to what the terminal shows. Nothing else changes. */
 export function cleanTerminal(text: string): string {
-  return text
-    .replace(CSI, "")
-    .replace(OSC, "")
-    .split("\n")
-    .map((l) => l.replace(/\r+$/, "").replace(/^[^]*\r/, ""))
-    .join("\n");
+  return text.split("\n").map(cleanLine).join("\n");
+}
+
+/** Cleans each stream on its own, so a \r opening stderr cannot reach back into stdout's last line. */
+function cleanStreams(out: string, err: string): string {
+  const o = cleanTerminal(out);
+  return o && err && !o.endsWith("\n") ? `${o}\n${cleanTerminal(err)}` : o + cleanTerminal(err);
 }
 
 function tail(text: string, n: number): { text: string; cut: number } {
@@ -141,7 +173,8 @@ export function renderReport(r: {
   tasks: string[];
   testCommand: string;
   testCode: number;
-  testOutput: string;
+  testOut: string;
+  testErr: string;
   logPath: string;
   sensitive: string[];
   deps: string[];
@@ -150,7 +183,7 @@ export function renderReport(r: {
   knownIssues: string[];
 }): string {
   const list = (items: string[], empty: string) => (items.length ? items.map((i) => `- ${i}`).join("\n") : `- ${empty}`);
-  const t = tail(cleanTerminal(r.testOutput), TEST_TAIL_LINES);
+  const t = tail(cleanStreams(r.testOut, r.testErr), TEST_TAIL_LINES);
   return [
     `# 目标报告：${r.goal}${r.title ? `：${r.title}` : ""}`,
     "",
@@ -224,7 +257,7 @@ export function report(cwd: string, goal: string): { path: string; meta: ReportM
     const logPath = join(reportsDir(cwd), `${goal}-${head.slice(0, 12)}.test.log`);
     const markdown = renderReport({
       goal, head, base: t.base, trialMerge: t.merged, title: goalFile.title, tasks,
-      testCommand: config.test, testCode: t.testCode, testOutput: t.testOutput, logPath,
+      testCommand: config.test, testCode: t.testCode, testOut: t.testOut, testErr: t.testErr, logPath,
       sensitive: sensitiveHits(paths, config.sensitive ?? DEFAULT_SENSITIVE),
       deps, kinds: newKinds(cwd, files.filter((f) => f.status === "A").map((f) => f.path)),
       shelved: goalFile.shelved ?? [], knownIssues: goalFile.known_issues ?? [],
