@@ -1,7 +1,12 @@
 {
   "title": "M0 tasks 9-20 in one goal, approved once at the end",
   "acceptance": [],
-  "shelved": [],
+  "shelved": [
+    {
+      "task": "t14 hq sync",
+      "why": "Shelved after 4 review rounds (user's rule). Merging main into a goal worktree in place kept losing ignored or untracked local files: through paths main adds, paths it modifies, directory-rename detection, case folding on case-insensitive file systems, and ignored nested git repositories. A safer design merges in a scratch worktree and only fast-forwards the goal worktree when its checkout cannot touch any untracked or ignored path. The four commits are reverted on this branch."
+    }
+  ],
   "known_issues": [
     "t10 hq review: the temporary branch name embeds the task id, so an id containing '..' (or other ref-invalid sequences) cannot run its review (Codex P2, round 2). Ids in use are tNN."
   ],
