@@ -12,7 +12,6 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/approval.ts     批准记录：~/.hq/approvals/<仓库>/，绑定一个 commit，合入后作废
   src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
   src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
-  src/sync.ts         把最新 main 并进目标分支（`hq sync`）：在目标的 worktree 里做合并提交，不 rebase；冲突就 abort、列出冲突文件；不碰 `$HQ_HOME`，旧批准和报告因此对不上新的头
   src/status.ts       总览（`hq status`）：每个目标分支的头、领先落后、报告与批准状态、未完成任务；只读
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
   src/clues.ts        报告风险栏的线索：goal 新增行里 main 没 import 过的模块、新的进程或网络调用，源码和测试文件分开；正则，只是线索
@@ -45,7 +44,6 @@ goals/<目标>.json      目标分支上的目标文件：title、shelved（搁�
 | --- | --- | --- | --- |
 | hq 合入锁 | 没有你的批准，main 不动（D29） | `hq approve <目标>`（只认终端输入，要先有这个 commit 的绿色报告）、`hq merge <目标>`、`hq install-hook` | git、srt；批准记录在 `$HQ_HOME`（默认 `~/.hq`） |
 | hq 目标报告 | 批准前读的五栏报告（D31） | `hq report <目标>` | 合并预演、`.hq.json`（`sensitive` 可覆盖默认敏感路径）、`goals/<目标>.json` |
-| hq 同步 | 目标分支跟上 main | `hq sync <目标>` | git；目标的 worktree |
 | hq 总览 | 每个目标现在在哪一步 | `hq status [--json]`，只读 | git、报告和批准记录、记账 |
 | hq 记账 | M0 的指标数据（测评、D39） | `hq task start/gate/cost/lines/shelve/cause/false-reject`、`hq escalate`、`hq escape`、`hq stats [--json\|--tasks]`；approve 和 merge 自动记 | `$HQ_HOME/ledger`（执行者沙箱写不了） |
 | main 守卫钩子 | 兜底：不在沙箱里的会话也改不了 main | git 调 `~/.hq/bin/hq guard`；人手动改 main 时设 `HQ_ALLOW_MAIN=1` | hq 的批准记录、安装版本 |
