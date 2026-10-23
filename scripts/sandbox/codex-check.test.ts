@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { EXPECTED, verdicts } from "./check";
-import { classify, codexCommand, codexSrtSettings, DENIALS, probeLines } from "./codex-check";
+import { classify, codexCommand, codexSrtSettings, DENIALS, prepareCodexHome, probeLines } from "./codex-check";
 
 const event = (item: object, type = "item.completed") => JSON.stringify({ type, item });
 
@@ -18,12 +21,46 @@ test("probe lines come from command results, not from the model's text", () => {
   expect(verdicts(lines).get("tests")).toBe("FAIL: 1 fail");
 });
 
-test("settings are hq's executor rules plus Codex's home and model API", () => {
-  const s = codexSrtSettings({ worktree: "/wt", commonDir: "/repo/.git", codexHome: "/home/me/.codex" });
-  expect(s.filesystem.allowWrite).toEqual(expect.arrayContaining(["/wt", "/repo/.git", "/home/me/.codex"]));
+test("settings are hq's executor rules plus a throwaway Codex home and the model API", () => {
+  const s = codexSrtSettings({ worktree: "/wt", commonDir: "/repo/.git", codexHome: "/tmp/hq-codex-home-x" });
+  expect(s.filesystem.allowWrite).toEqual(expect.arrayContaining(["/wt", "/repo/.git", "/tmp/hq-codex-home-x"]));
   expect(s.filesystem.denyWrite).toEqual(expect.arrayContaining(["/repo/.git/refs/heads/main", "/repo/.git/packed-refs", "/repo/.git/hooks", "/repo/.git/config"]));
   expect(s.filesystem.denyRead.some((p) => p.endsWith("/.ssh"))).toBe(true);
   expect(s.network.allowedDomains).toEqual(["api.openai.com", "chatgpt.com", "auth.openai.com"]);
+});
+
+test("~/.codex (and a CODEX_HOME it was copied from) is write-denied and never writable", () => {
+  const real = join(homedir(), ".codex");
+  const s = codexSrtSettings({ worktree: "/wt", commonDir: "/repo/.git", codexHome: "/tmp/hq-codex-home-x", sourceHome: "/elsewhere/codex" });
+  expect(s.filesystem.allowWrite).not.toContain(real);
+  expect(s.filesystem.allowWrite).not.toContain("/elsewhere/codex");
+  expect(s.filesystem.denyWrite).toEqual(expect.arrayContaining([real, "/elsewhere/codex"]));
+});
+
+test("the temporary Codex home holds only the copied login and config, and removal leaves the source alone", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-home-test-"));
+  try {
+    const src = join(root, "src");
+    mkdirSync(join(src, "sessions"), { recursive: true });
+    writeFileSync(join(src, "auth.json"), '{"token":"t"}');
+    writeFileSync(join(src, "config.toml"), 'approval_policy = "never"');
+    writeFileSync(join(src, "history.jsonl"), "secret");
+    const home = prepareCodexHome(src, root);
+    expect(readdirSync(home).sort()).toEqual(["auth.json", "config.toml"]);
+    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe('{"token":"t"}');
+    writeFileSync(join(home, "auth.json"), '{"token":"refreshed"}');
+    rmSync(home, { recursive: true, force: true });
+    expect(existsSync(home)).toBe(false);
+    expect(readFileSync(join(src, "auth.json"), "utf8")).toBe('{"token":"t"}');
+
+    rmSync(join(src, "config.toml"));
+    const bare = prepareCodexHome(src, root);
+    expect(readdirSync(bare)).toEqual(["auth.json"]);
+    rmSync(join(src, "auth.json"));
+    expect(() => prepareCodexHome(src, root)).toThrow("codex login");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Codex runs non-interactively in the worktree with its own sandbox off", () => {

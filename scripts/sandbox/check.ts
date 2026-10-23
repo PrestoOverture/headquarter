@@ -20,7 +20,7 @@ const PROBE = "bash scripts/sandbox/probe.sh";
 export const EXPECTED = [
   "tests", "commit", "spawn_kill", "spawn_kill_tree", "tmp_write", "local_listen",
   "hooks_write", "config_write", "main_update_ref", "main_ref_file", "packed_refs_write",
-  "home_write", "ssh_read", "net_direct", "net_proxy",
+  "home_write", "codex_home_write", "ssh_read", "net_direct", "net_proxy",
 ];
 
 export function git(args: string[], cwd: string): string {
