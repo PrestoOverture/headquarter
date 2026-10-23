@@ -1,0 +1,9 @@
+duckdb__duckdb-24318
+gitbutlerapp__gitbutler-14920
+yvgude__lean-ctx-969
+SubtitleEdit__subtitleedit-12151
+SubtitleEdit__subtitleedit-12763
+h4ckf0r0day__obscura-479
+langchain4j__langchain4j-5755
+btraceio__btrace-897
+duckdb__ducklake-1339

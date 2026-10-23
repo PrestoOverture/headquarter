@@ -23,6 +23,8 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   test/               假执行者的端到端测试：真 git、真 worktree、真沙箱
 eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、判卷、汇总）
   src/merge-runs.ts   把几次运行的结果合成一份，每道题取最新的判卷（`bun src/merge-runs.ts <out> <run>...`）
+  src/ab.ts           两份合并结果逐题对比：修好、弄坏、不变，两边都判了的题上的抓住率（`bun src/ab.ts <a> <b> [--ids <file>]`）
+  src/writer_prompt_v2.md  出题提示词第二版（`write.ts --prompt v2`，默认 v1）；A/B 用法见 `ab/README.md`
 scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查
 docs/                 设计、路线、历史
 goals/<目标>.json      目标分支上的目标文件：title、shelved（搁置的任务）、known_issues（既有问题）；报告从这里读

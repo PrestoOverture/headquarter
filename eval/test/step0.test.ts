@@ -5,8 +5,8 @@ import { BLOCKED, BlockProxy, target } from "../src/proxy";
 import { run } from "../src/sh";
 import { summarize } from "../src/summarize";
 import { keptTasks, PUBLIC_FIELDS, stripGold } from "../src/tasks";
-import { binaryPaths, buildOutputExcludes, claudeResult, promptFor } from "../src/write";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { binaryPaths, buildOutputExcludes, claudeResult, promptFor, promptVersion, writeRecord } from "../src/write";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -153,4 +153,54 @@ test("a rebuild timeout is a grade error, not a miss", () => {
   );
   expect(s.graded).toBe(1);
   expect(s.catch_rate).toBe(1);
+});
+
+describe("writer prompt versions", () => {
+  const task = () => stripGold(keptTasks(new URL("../tasks/tasks.json.gz", import.meta.url).pathname)[0]!);
+  const v1 = () => promptFor(task(), "/tmp/ws/x/testbed", "/tmp/ws/x/bin/envrun");
+  const v2 = () => promptFor(task(), "/tmp/ws/x/testbed", "/tmp/ws/x/bin/envrun", "v2");
+
+  test("v1 is the default and is the prompt file step 0 used", () => {
+    expect(v1()).toBe(promptFor(task(), "/tmp/ws/x/testbed", "/tmp/ws/x/bin/envrun", "v1"));
+    expect(v1()).not.toBe(v2());
+  });
+  test("v2 fills every placeholder", () => {
+    const t = task();
+    const p = v2();
+    expect(p).not.toMatch(/\{(repo|workdir|envrun|rebuild_cmds|problem_statement)\}/);
+    expect(p).toContain(t.repo);
+    expect(p).toContain("/tmp/ws/x/testbed");
+    expect(p).toContain("/tmp/ws/x/bin/envrun");
+    expect(p).toContain(t.rebuild_cmds[0]!);
+    expect(p).toContain(t.problem_statement);
+  });
+  test("v2 keeps v1's text and adds the four rules", () => {
+    const template = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    const [one, two] = [template("writer_prompt.md"), template("writer_prompt_v2.md")];
+    for (const line of one.split("\n").filter(Boolean)) expect(two).toContain(line);
+    expect(two).toContain("Assert only the behavior the issue describes");
+    expect(two).toContain("`1` versus `1.0`");
+    expect(two).toContain("Do not extend its reproduction");
+    expect(two).toContain("public interfaces");
+    expect(two).toContain("Never guess an internal");
+    expect(two).toContain("available offline in the container");
+  });
+  test("--prompt accepts v1 and v2 only", () => {
+    expect(promptVersion("v1")).toBe("v1");
+    expect(promptVersion("v2")).toBe("v2");
+    for (const bad of ["v3", "", "toString", "__proto__"]) expect(() => promptVersion(bad)).toThrow("--prompt must be one of v1, v2");
+    const r = run(["bun", "src/write.ts", "--tasks", "t.json", "--id", "x", "--out", "o", "--prompt", "v3"], { cwd: new URL("..", import.meta.url).pathname });
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("--prompt must be one of v1, v2");
+  });
+  test("write.json records the prompt version", () => {
+    const rec = writeRecord(task(), "claude-sonnet-5-5", "v2", { exit_code: 0 });
+    expect(rec).toMatchObject({ instance_id: task().instance_id, model: "claude-sonnet-5-5", prompt: "v2", exit_code: 0 });
+    expect(Object.keys(rec).slice(0, 3)).toEqual(["instance_id", "model", "prompt"]);
+  });
+  test("the step0 workflow passes a prompt input, default v1, to write.ts", () => {
+    const wf = readFileSync(new URL("../../.github/workflows/step0.yml", import.meta.url), "utf8");
+    expect(wf).toMatch(/\n {6}prompt:\n(?: {8}.*\n)*? {8}default: v1\n/);
+    expect(wf).toContain('--prompt "${{ inputs.prompt }}"');
+  });
 });
