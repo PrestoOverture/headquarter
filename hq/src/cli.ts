@@ -21,11 +21,13 @@
 //   hq task false-reject <task> <gate> [--note <text>]
 //   hq escalate --goal <goal> --why <text> [--task <task>] [--minutes <n>]
 //   hq escape <task> --note <text>
+//   hq escapes            goals merged in the last 14 days that a later fix touches again (suggestions; records nothing)
 //   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>]
 
 import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
+import { escapeCandidates, render as renderEscapes } from "./escape";
 import { git, revParse } from "./git";
 import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
@@ -226,6 +228,8 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log(`merged goal ${goal} into ${MAIN} as ${r.mergeCommit.slice(0, 12)}\nto take it back out: ${r.revert}`);
       for (const err of r.linesErrors) console.error(`could not measure task size: ${err}`);
+      if (r.escapes.length) console.log(renderEscapes(r.escapes));
+      if (r.escapesError) console.error(`could not look for escape candidates: ${r.escapesError}`);
       if (r.reinstalled) console.log(`hq changed: installed ${r.reinstalled.slice(0, 12)} (hq rollback to undo)`);
       if (r.reinstallError) console.error(`hq changed but reinstalling failed; still running ${installed("current")}: ${r.reinstallError}`);
       return 0;
@@ -253,6 +257,11 @@ async function main(argv: string[]): Promise<number> {
       if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
       return 0;
     }
+    if (cmd === "escapes") {
+      const found = escapeCandidates(cwd);
+      console.log(found.length ? renderEscapes(found) : "no escape candidates");
+      return 0;
+    }
     if (cmd === "task" || cmd === "escalate" || cmd === "escape") {
       console.log(record(cwd, argv));
       return 0;
@@ -261,7 +270,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq status [--json] | hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq status [--json] | hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 

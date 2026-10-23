@@ -17,6 +17,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/ledger.ts       记账（M0.3）：~/.hq/ledger/<仓库>/events.jsonl，只追加
   src/lines.ts        任务大小（200 行规则）：基线到结束 commit 的增删行数，只算文本文件，不算 goals/*.json 和锁文件
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
+  src/escape.ts       逃逸候选：近 14 天合入的目标，被之后某个目标的修复提交再次改到（`hq escapes`，合入后也打印）；只建议，不记账
   src/versions.ts     安装版本（M0.4）：~/.hq/versions/<commit>、current / previous、启动器 ~/.hq/bin/hq
   src/guard.ts        reference-transaction 钩子：main 只能移到已批准目标的合并提交
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令

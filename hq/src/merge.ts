@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeApproval, goalBranch, MAIN, readApproval } from "./approval";
+import { type Candidate, escapeCandidates } from "./escape";
 import { commonDir, git, revParse, run, worktreeOf } from "./git";
 import { append, readEvents } from "./ledger";
 import { recordLines } from "./lines";
@@ -17,7 +18,7 @@ import { reinstallIfChanged } from "./versions";
 
 export type Config = { test: string; sensitive?: string[] };
 export type MergeResult =
-  | { ok: true; mergeCommit: string; revert: string; testOutput: string; reinstalled: string | null; reinstallError?: string; linesErrors: string[] }
+  | { ok: true; mergeCommit: string; revert: string; testOutput: string; reinstalled: string | null; reinstallError?: string; linesErrors: string[]; escapes: Candidate[]; escapesError?: string }
   | { ok: false; reason: string; testOutput?: string };
 
 /** The config comes from main, so a goal cannot weaken the tests it is judged by. */
@@ -100,6 +101,14 @@ export function merge(cwd: string, goal: string): MergeResult {
     } catch (e) {
       reinstallError = (e as Error).message;
     }
-    return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput, reinstalled, reinstallError, linesErrors };
+    // Suggestions only; like the steps above, a failure here must not fail a merge that has happened.
+    let escapes: Candidate[] = [];
+    let escapesError: string | undefined;
+    try {
+      escapes = escapeCandidates(cwd, new Date(), merged);
+    } catch (e) {
+      escapesError = (e as Error).message;
+    }
+    return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput, reinstalled, reinstallError, linesErrors, escapes, escapesError };
   });
 }
