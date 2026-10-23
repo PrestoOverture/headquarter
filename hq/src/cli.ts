@@ -6,6 +6,7 @@
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
 //   hq merge <goal>       merge an approved goal into main after the full tests pass
+//   hq review <goal> --task <task> [--claimed-done] [--no-record]   Codex review of the task, recorded as the codex_review gate
 //   hq install [<rev>]    install hq/ from main (or <rev>) as the version that runs (M0.4)
 //   hq rollback           go back to the previously installed version
 //   hq version            the installed current and previous versions
@@ -35,6 +36,7 @@ import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { recordLines } from "./lines";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
+import { render as renderReview, review } from "./review";
 import { install, installed, launcherPath, rollback } from "./versions";
 import { type Filters, filterEvents, parseDate, render, rows, stats, toCsv } from "./stats";
 import { render as renderStatus, status } from "./status";
@@ -234,6 +236,13 @@ async function main(argv: string[]): Promise<number> {
       if (r.reinstallError) console.error(`hq changed but reinstalling failed; still running ${installed("current")}: ${r.reinstallError}`);
       return 0;
     }
+    if (cmd === "review" && goal) {
+      const { values: o } = parseArgs({ args: argv.slice(2), options: { task: { type: "string" }, "claimed-done": { type: "boolean" }, "no-record": { type: "boolean" } } });
+      const r = review(cwd, goal, need(o.task, "--task"), { claimedDone: o["claimed-done"], record: !o["no-record"] });
+      console.log(r.output.trimEnd());
+      console.log(renderReview(r));
+      return r.result === "pass" ? 0 : 1;
+    }
     if (cmd === "install") {
       const c = install(cwd, goal);
       console.log(`installed hq ${c.slice(0, 12)} at ${launcherPath()}; previous: ${installed("previous") ?? "none"}`);
@@ -270,7 +279,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq status [--json] | hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq status [--json] | hq report|approve|merge <goal> | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 
