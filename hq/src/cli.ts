@@ -3,6 +3,7 @@
 //
 //   hq goal new <name> [--title <text>] [--from <rev>]   start goal/<name> in a linked worktree <repo>.goals/<name>
 //   hq replay <task> [--as <name>]   goal/<name> (default replay-<task>) at the task's recorded base, with its acceptance criteria; records nothing
+//   hq env <task> [--release]   ports (a block of 10 from HQ_PORT_BASE), temp dir and database name for the task, as export lines; --release frees them
 //   hq status [--json]    every goal: head, ahead/behind main, report and approval state, open tasks
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
@@ -30,6 +31,7 @@
 import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
+import { allocate, release, render as renderEnv } from "./env";
 import { escapeCandidates, render as renderEscapes } from "./escape";
 import { git, revParse } from "./git";
 import { newGoal } from "./goal";
@@ -222,6 +224,14 @@ async function main(argv: string[]): Promise<number> {
       console.log(renderReplay(replay(cwd, p[0]!, o.as)));
       return 0;
     }
+    if (cmd === "env") {
+      const usage = "usage: hq env <task> [--release]";
+      const { values: o, positionals: p } = parseArgs({ args: argv.slice(1), allowPositionals: true, options: { release: { type: "boolean" } } });
+      if (p.length !== 1) throw new Error(usage);
+      if (o.release) console.log((await release(cwd, p[0]!)) ? `released the env of task ${p[0]}` : `task ${p[0]} had no env`);
+      else console.log(renderEnv(await allocate(cwd, p[0]!)));
+      return 0;
+    }
     if (cmd === "status") {
       const { values: o } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" } } });
       const goals = status(cwd);
@@ -297,7 +307,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq status [--json] | hq report|approve|merge <goal> | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq env <task> [--release] | hq status [--json] | hq report|approve|merge <goal> | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 

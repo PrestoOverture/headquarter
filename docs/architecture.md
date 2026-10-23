@@ -13,6 +13,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
   src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
   src/replay.ts       重放任务（`hq replay <任务>`）：从任务记录的基线开新目标分支和 worktree，目标文件带原目标标题、该任务的验收标准和 replay_of；只读账本，打印原任务的大小和各关卡结果
+  src/env.ts          任务环境（`hq env <任务>`）：每个任务一块 10 个连续端口（20000–29999，分配时在 127.0.0.1 上试绑，占着的块跳过）、$TMPDIR/hq-env/<任务>、数据库名 hq_<任务>；分配记在 $HQ_HOME/env/<仓库>.json，改动都在 O_EXCL 锁文件下做（60 秒算过期）；`--release` 释放
   src/status.ts       总览（`hq status`）：每个目标分支的头、领先落后、报告与批准状态、未完成任务；只读
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
   src/clues.ts        报告风险栏的线索：goal 新增行里 main 没 import 过的模块、新的进程或网络调用，源码和测试文件分开；正则，只是线索
