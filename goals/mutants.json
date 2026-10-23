@@ -9,7 +9,10 @@
     "Tests in eval/test cover: splitting with several files and hunks, new and deleted files, hunk headers after removal (checked with git apply --check on a real temp repo), the 8-mutant cap, the per-mutant result rules, the summary score and its denominator, and the workflow input"
   ],
   "shelved": [],
-  "known_issues": [],
+  "known_issues": [
+    "Flaky: hq/test/status.test.ts 'read-only: \u2026' timed out (7.2 s over a 5 s limit) in the sandboxed full run while both reviews ran; it passed on rerun (D36). Not this goal's code; the test needs a longer timeout or a lighter fixture.",
+    "build_failed is a lower bound: a compile error that happens inside the writer's script rather than in the rebuild still counts the mutant as killed."
+  ],
   "scope": "eval",
   "check": "cd eval && bun test && bunx tsc --noEmit"
 }
