@@ -1,6 +1,15 @@
 {
   "title": "eval: writer prompt v2 (assert only the issue's behavior) and an A/B comparison",
-  "acceptance": [],
+  "acceptance": [
+    "eval/src/writer_prompt_v2.md: the v1 prompt plus rules drawn from step 0's misses (docs/history.md): assert only the behavior the issue describes, not representation details it does not state (for example 1 versus 1.0, exact formatting); do not extend the issue's reproduction with cases it does not mention; use the code's public interfaces, never guess internal names; before using a test library or helper, check it is already available offline in the container",
+    "write.ts takes `--prompt v1|v2` (default v1, so step 0's runs stay comparable) and records the prompt version in write.json; the step0 workflow gets a `prompt` input (default v1) passed through to write.ts",
+    "eval/ab/missed.txt lists the 9 step-0 misses (duckdb__duckdb-24318, gitbutlerapp__gitbutler-14920, yvgude__lean-ctx-969, SubtitleEdit__subtitleedit-12151, SubtitleEdit__subtitleedit-12763, h4ckf0r0day__obscura-479, langchain4j__langchain4j-5755, btraceio__btrace-897, duckdb__ducklake-1339) and eval/ab/controls.txt 9 caught tasks as controls (c-ares__c-ares-1190, IfcOpenShell__IfcOpenShell-8887, duckdb__ducklake-1340, angularsen__UnitsNet-1698, OrchardCMS__OrchardCore-19492, agentscope-ai__agentscope-java-2343, apache__paimon-8536, jsonata-js__jsonata-809, h4ckf0r0day__obscura-440)",
+    "`bun src/ab.ts <a-results> <b-results> [--ids <file>]` compares two merged result directories (merge-runs output) task by task: each id's verdict in A and in B, counts of fixed (miss to caught), broken (caught to miss) and unchanged, and catch rates with denominators over the ids present in both; ids missing on either side are listed, never counted",
+    "eval/ab/README.md says how to run it: dispatch step0 with prompt=v2 on missed.txt and controls.txt, merge the runs with merge-runs, and compare against the v1 merge",
+    "Tests in eval/test cover the v2 prompt's placeholders and rules, the --prompt option and the recorded version, and the comparison (fixed, broken, unchanged, missing ids, denominators)"
+  ],
   "shelved": [],
-  "known_issues": []
+  "known_issues": [],
+  "scope": "eval",
+  "check": "cd eval && bun test && bunx tsc --noEmit"
 }
