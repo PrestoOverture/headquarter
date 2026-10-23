@@ -18,7 +18,9 @@ export function newGoal(cwd: string, goal: string, opts: { title?: string; from?
   const path = goalWorktreePath(cwd, goal);
   if (existsSync(path)) throw new Error(`${path} already exists`);
   const from = opts.from ?? MAIN;
-  if (!revParse(from, cwd)) throw new Error(`${from} is not a commit`);
+  const start = revParse(from, cwd);
+  if (!start) throw new Error(`${from} is not a commit`);
+  if (run(["git", "cat-file", "-e", `${start}:goals/${goal}.json`], cwd).code === 0) throw new Error(`goals/${goal}.json already exists at ${from}`);
 
   const parent = dirname(path);
   const parentExisted = existsSync(parent);

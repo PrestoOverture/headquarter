@@ -118,6 +118,20 @@ test("refuses a --from that is not a commit", () => {
   refuses(["nofrom", "--from", tree], /is not a commit/);
 });
 
+test("refuses when goals/<name>.json already exists at main or at --from, and creates nothing", () => {
+  const before = git(["rev-parse", "main"], repo);
+  mkdirSync(join(repo, "goals"));
+  const old = commit(repo, "goals/done.json", '{"title":"Old"}\n', "old goal");
+  refuses(["done"], /goals\/done\.json already exists at main/);
+  refuses(["done", "--from", old], /goals\/done\.json already exists at /);
+  refuses(["done", "--from", "main"], /goals\/done\.json already exists at main/);
+  expect(git(["show", "main:goals/done.json"], repo)).toBe('{"title":"Old"}');
+  expect(git(["branch", "--list", "goal/done"], repo)).toBe("");
+  // a --from before the file existed is fine
+  expect(hq(repo, "goal", "new", "done", "--from", before).code).toBe(0);
+  expect(git(["diff", "--name-status", before, "goal/done"], repo)).toBe("A\tgoals/done.json");
+});
+
 test("a failing post-checkout hook leaves nothing behind, reports its error, and a retry works", () => {
   const hook = join(repo, ".git", "hooks", "post-checkout");
   writeFileSync(hook, "#!/bin/sh\necho hook-says-no >&2\nexit 1\n");
