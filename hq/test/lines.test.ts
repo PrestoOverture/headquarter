@@ -2,12 +2,12 @@
 // manual command and its refusals, and what hq stats shows.
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { approve, record } from "../src/cli";
 import { git, revParse } from "../src/git";
-import { append, readEvents } from "../src/ledger";
+import { append, ledgerPath, readEvents } from "../src/ledger";
 import { diffSize } from "../src/lines";
 import { merge } from "../src/merge";
 import { writeReport } from "../src/report";
@@ -157,6 +157,21 @@ describe("hq merge", () => {
     expect(r.ok && r.linesErrors).toHaveLength(1);
     expect(r.ok && r.linesErrors[0]).toContain("broken");
     expect(readEvents(repo).filter((e) => e.type === "task.lines")).toMatchObject([{ task: "open1", added: 2 }]);
+  });
+
+  withSandbox("a corrupt ledger line only warns: main has moved and the merge result is still returned", () => {
+    startTask("open1");
+    commit(wt, { "a.ts": nlines(2) });
+    approveGoal();
+    appendFileSync(ledgerPath(repo), "{not json\n");
+    const before = revParse("main", repo);
+    const r = merge(repo, "x");
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.linesErrors).toHaveLength(1);
+    expect(r.ok && r.linesErrors[0]).toContain("ledger could not be read");
+    expect(revParse("main", repo)).not.toBe(before);
+    expect(r.ok && revParse("main", repo)).toBe(r.ok && r.mergeCommit);
+    expect(r.ok && r.revert).toContain("git revert -m 1");
   });
 });
 

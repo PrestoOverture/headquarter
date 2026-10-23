@@ -76,13 +76,18 @@ export function merge(cwd: string, goal: string): MergeResult {
     else git(["update-ref", `refs/heads/${MAIN}`, merged, base], cwd);
     consumeApproval(cwd, goal, merged);
     // Sizes before the merge event: after it, the goal's tasks no longer read as open.
+    // main has moved: nothing here may fail the merge, only warn.
     const linesErrors: string[] = [];
-    for (const r of rows(readEvents(cwd)).filter((r) => r.goal === goal && r.status === "open")) {
-      try {
-        recordLines(cwd, r.task, head);
-      } catch (e) {
-        linesErrors.push(`${r.task}: ${(e as Error).message}`);
+    try {
+      for (const r of rows(readEvents(cwd)).filter((r) => r.goal === goal && r.status === "open")) {
+        try {
+          recordLines(cwd, r.task, head);
+        } catch (e) {
+          linesErrors.push(`${r.task}: ${(e as Error).message}`);
+        }
       }
+    } catch (e) {
+      linesErrors.push(`no task sizes recorded, the ledger could not be read: ${(e as Error).message}`);
     }
     append(cwd, { type: "merge", goal, commit: head, merge_commit: merged });
     // D44: a goal that changed hq takes effect only now, from the merged main.
