@@ -12,8 +12,9 @@ Object.assign(process.env, { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_
 
 const init = { type: "system", subtype: "init", model: "claude-sonnet-5-5" };
 const assistant = { type: "assistant", message: { content: [{ type: "text", text: "done" }] } };
-const result = (usd: number, models: string[] = ["claude-sonnet-5-5"]) => ({
-  type: "result", subtype: "success", is_error: false, total_cost_usd: usd, modelUsage: Object.fromEntries(models.map((m) => [m, { costUSD: usd }])),
+const result = (usd: number, models: string[] = ["claude-sonnet-5-5"], session_id = `s${usd}`) => ({
+  type: "result", subtype: "success", is_error: false, session_id, total_cost_usd: usd,
+  modelUsage: Object.fromEntries(models.map((m) => [m, { costUSD: usd }])),
 });
 const lines = (...ms: object[]) => ms.map((m) => JSON.stringify(m)).join("\n") + "\n";
 
@@ -58,11 +59,11 @@ describe("hq task cost --from", () => {
   });
 
   test("several sessions' result lines are summed; the model falls back to the init message", () => {
-    const noUsage = { type: "result", subtype: "success", total_cost_usd: 0.25 };
-    const p = file("d.jsonl", lines(init, result(0.5, ["a", "b"]), { ...init, model: "c" }, noUsage, result(1, ["a"])));
+    const noUsage = { type: "result", subtype: "success", session_id: "n", total_cost_usd: 0.25 };
+    const p = file("d.jsonl", lines(init, result(0.5, ["a", "b"], "s1"), { ...init, model: "c" }, noUsage, result(1, ["a"], "s2")));
     record(repo, ["task", "cost", "t1", "--from", p]);
     const [e] = costs();
-    expect(e).toMatchObject({ model: "a, b, c" });
+    expect(e).toMatchObject({ model: "a, b, c", sessions: ["s1", "n", "s2"] });
     expect((e as { usd: number }).usd).toBeCloseTo(1.75);
   });
 
@@ -75,17 +76,51 @@ describe("hq task cost --from", () => {
     expect(costs()).toHaveLength(0);
   });
 
-  test("the same file twice for a task is refused, also under another path; another task may take it", () => {
+  test("the same file twice is refused, for the same task, another task, or under another path", () => {
     const text = lines(init, result(0.3));
     const p = file("f.jsonl", text);
     record(repo, ["task", "cost", "t1", "--from", p]);
     expect(() => record(repo, ["task", "cost", "t1", "--from", p])).toThrow("already recorded");
     expect(() => record(repo, ["task", "cost", "t1", "--from", file("copy.jsonl", text)])).toThrow("already recorded");
-    expect(costs()).toHaveLength(1);
     record(repo, ["task", "start", "t2", "--goal", "x", "--title", "z", "--model", "m"]);
-    record(repo, ["task", "cost", "t2", "--from", p]);
+    expect(() => record(repo, ["task", "cost", "t2", "--from", p])).toThrow("already recorded");
+    expect(costs()).toHaveLength(1);
+    record(repo, ["task", "cost", "t1", "--from", file("g.jsonl", lines(init, result(0.3, ["other"], "other-session")))]);
     expect(costs()).toHaveLength(2);
-    record(repo, ["task", "cost", "t1", "--from", file("g.jsonl", lines(init, result(0.3, ["other"])))]);
-    expect(costs()).toHaveLength(3);
+  });
+
+  test("a log recorded, then appended to and recorded again: only the new session counts", () => {
+    const p = file("grow.jsonl", lines(init, result(0.3, ["m"], "a")));
+    record(repo, ["task", "cost", "t1", "--from", p]);
+    writeFileSync(p, lines(init, result(0.3, ["m"], "a"), init, result(0.7, ["m"], "b")));
+    const out = record(repo, ["task", "cost", "t1", "--from", p]);
+    expect(out).toContain("$0.7000");
+    expect(out).toContain("skipped, already recorded: a");
+    expect(costs().map((e) => (e as { usd: number }).usd)).toEqual([0.3, 0.7]);
+    expect(costs().map((e) => (e as { sessions?: string[] }).sessions)).toEqual([["a"], ["b"]]);
+    expect(() => record(repo, ["task", "cost", "t1", "--from", p])).toThrow("already recorded: a, b");
+  });
+
+  test("a resumed session with two result lines counts once, at its last total", () => {
+    const p = file("resumed.jsonl", lines(init, result(0.4, ["m"], "r"), init, result(0.9, ["m"], "r"), result(0.2, ["m"], "q")));
+    record(repo, ["task", "cost", "t1", "--from", p]);
+    const [e] = costs();
+    expect(e).toMatchObject({ sessions: ["r", "q"] });
+    expect((e as { usd: number }).usd).toBeCloseTo(1.1);
+  });
+
+  test("the same session in two files is counted once, across tasks too", () => {
+    const first = file("one.jsonl", lines(init, result(0.5, ["m"], "shared")));
+    const second = file("two.jsonl", lines(init, result(0.5, ["m"], "shared"), result(0.25, ["m"], "own")));
+    record(repo, ["task", "cost", "t1", "--from", first]);
+    record(repo, ["task", "start", "t2", "--goal", "x", "--title", "z", "--model", "m"]);
+    expect(record(repo, ["task", "cost", "t2", "--from", second])).toContain("skipped, already recorded: shared");
+    expect(costs().at(-1)).toMatchObject({ task: "t2", usd: 0.25, sessions: ["own"] });
+  });
+
+  test("a result without session_id is refused, nothing recorded", () => {
+    const bare = { ...result(0.5), session_id: undefined };
+    expect(() => record(repo, ["task", "cost", "t1", "--from", file("bare.jsonl", lines(init, result(0.1), bare))])).toThrow("no session_id");
+    expect(costs()).toHaveLength(0);
   });
 });
