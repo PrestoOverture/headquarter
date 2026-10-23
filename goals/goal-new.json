@@ -1,0 +1,12 @@
+{
+  "title": "hq goal new: start a goal in one command",
+  "acceptance": [
+    "`hq goal new <name> [--title <text>] [--from <rev>]` creates branch goal/<name> from main (or from <rev>) and a linked worktree at <repo>.goals/<name>, a sibling of the repository directory",
+    "The goal branch's first commit adds goals/<name>.json with title, acceptance (empty list), shelved (empty list) and known_issues (empty list); the commit message is \"goal <name>: start\"",
+    "It refuses, changing nothing: a name that is not lowercase letters, digits and dashes (the same rule as hq approve); an existing goal/<name> branch; an existing worktree path; a --from that is not a commit",
+    "It prints the worktree path and the branch on success and exits 0; on refusal it prints why and exits non-zero",
+    "End-to-end tests in hq/test with a real git repository cover success and every refusal"
+  ],
+  "shelved": [],
+  "known_issues": []
+}
