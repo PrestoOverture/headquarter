@@ -22,6 +22,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令
   test/               假执行者的端到端测试：真 git、真 worktree、真沙箱
 eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、判卷、汇总）
+  src/merge-runs.ts   把几次运行的结果合成一份，每道题取最新的判卷（`bun src/merge-runs.ts <out> <run>...`）
 scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查
 docs/                 设计、路线、历史
 goals/<目标>.json      目标分支上的目标文件：title、shelved（搁置的任务）、known_issues（既有问题）；报告从这里读
