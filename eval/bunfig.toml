@@ -1,3 +1,0 @@
-[test]
-# Several suites run at once during the gates; the default 5 s is too short then.
-timeout = 30000

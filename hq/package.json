@@ -2,9 +2,11 @@
   "name": "hq",
   "private": true,
   "type": "module",
-  "bin": { "hq": "src/cli.ts" },
+  "bin": {
+    "hq": "src/cli.ts"
+  },
   "scripts": {
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
