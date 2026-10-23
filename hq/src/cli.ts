@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // hq — M0 tooling: merge lock (M0.1, D29), goal report (M0.2, D31), bookkeeping (M0.3).
 //
+//   hq goal new <name> [--title <text>] [--from <rev>]   start goal/<name> in a linked worktree <repo>.goals/<name>
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
 //   hq merge <goal>       merge an approved goal into main after the full tests pass
@@ -24,6 +25,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
 import { git, revParse } from "./git";
+import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
 import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { merge } from "./merge";
@@ -151,6 +153,15 @@ async function main(argv: string[]): Promise<number> {
   const [cmd, goal] = argv;
   const cwd = process.cwd();
   try {
+    if (cmd === "goal") {
+      const usage = "usage: hq goal new <name> [--title <text>] [--from <rev>]";
+      if (goal !== "new") throw new Error(usage);
+      const { values: o, positionals: p } = parseArgs({ args: argv.slice(2), allowPositionals: true, options: { title: { type: "string" }, from: { type: "string" } } });
+      if (p.length !== 1) throw new Error(usage);
+      const r = newGoal(cwd, p[0]!, o);
+      console.log(`worktree ${r.path}\nbranch ${r.branch}`);
+      return 0;
+    }
     if (cmd === "report" && goal) {
       const r = report(cwd, goal);
       console.log(r.markdown);
@@ -207,7 +218,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
   return 2;
 }
 
