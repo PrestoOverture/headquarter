@@ -1,6 +1,15 @@
 {
   "title": "eval: merge step-0 results across runs, latest grade per task",
-  "acceptance": [],
+  "acceptance": [
+    "`bun src/merge-runs.ts <out> <run-dir>...` (in eval/) merges step-0 result directories into <out>: one directory per instance id, taken whole from the run that holds that id's latest grade, plus summary.json and the Markdown summary from summarize()",
+    "A run directory may hold <id>/ directly (the step0-results artifact) or graded-<id>/<id>/ (artifacts downloaded by pattern); both layouts are read",
+    "Latest grade: grade.ts writes `graded_at` (ISO time) into report.json from now on; merge-runs prefers the newest graded_at and, for reports without it, the later run directory on the command line. A run where the id has write.json but no report.json never replaces an earlier graded copy",
+    "<out>/sources.json maps every instance id to the run directory it came from, and lists ids that have a writer output but no grade in any run",
+    "It refuses, writing nothing, when <out> already exists and is not empty, or when a run directory does not exist",
+    "Tests in eval/test cover both layouts, graded_at against argument order, an ungraded later run not replacing a graded earlier one, sources.json, the refusals, and that the merged summary equals summarize() over the chosen reports"
+  ],
   "shelved": [],
-  "known_issues": []
+  "known_issues": [],
+  "scope": "eval",
+  "check": "cd eval && bun test && bunx tsc --noEmit"
 }
