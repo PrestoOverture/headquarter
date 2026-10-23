@@ -29,6 +29,66 @@ export type TaskRow = {
   escape_window_open: boolean;
 };
 
+export type Filters = { goals?: string[]; since?: Date; until?: Date };
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/** An ISO 8601 date or date-time; with no zone it is UTC, like the ledger's own stamps. */
+export function parseDate(text: string, flag: string): Date {
+  const m = ISO_DATE.exec(text);
+  let t = NaN;
+  if (m) {
+    const [y, mo, d, h, mi, sec] = [1, 2, 3, 4, 5, 6].map((i) => Number(m[i] ?? 0));
+    const valid = mo! >= 1 && mo! <= 12 && d! >= 1 && d! <= new Date(Date.UTC(y!, mo!, 0)).getUTCDate() && h! <= 23 && mi! <= 59 && sec! <= 59;
+    if (valid) t = Date.parse(m[4] && !m[7] ? text + "Z" : text);
+  }
+  if (Number.isNaN(t)) throw new Error(`${flag}: ${JSON.stringify(text)} is not an ISO 8601 date or date-time`);
+  return new Date(t);
+}
+
+/**
+ * Keeps the tasks of the goals (--goal) that started in [since, until) and all events of those
+ * tasks. A goal-level event (report shown, approve, merge, escalate) belongs to the tasks open on
+ * its goal when it happened: started at or before it, not shelved before it, not closed by an
+ * earlier merge of the goal; an escalate that names a task belongs to that task only. It is kept
+ * when at least one task it belongs to is kept, so no numerator comes from uncounted tasks.
+ */
+export function filterEvents(events: Event[], f: Filters): Event[] {
+  if (!f.goals && f.since === undefined && f.until === undefined) return events;
+  const starts = new Map<string, { goal: string; at: number }>();
+  for (const e of events) if (e.type === "task.start") starts.set(e.task, { goal: e.goal, at: Date.parse(e.at) });
+  const shelvedAt = new Map<string, number>();
+  const mergesOf = new Map<string, number[]>(); // goal → merge times
+  for (const e of events) {
+    if (e.type === "task.shelve" && !shelvedAt.has(e.task)) shelvedAt.set(e.task, Date.parse(e.at));
+    else if (e.type === "merge") mergesOf.set(e.goal, [...(mergesOf.get(e.goal) ?? []), Date.parse(e.at)]);
+  }
+  const kept = new Set<string>();
+  for (const [task, s] of starts) {
+    const inGoals = !f.goals || f.goals.includes(s.goal);
+    const inWindow = (!f.since || s.at >= f.since.getTime()) && (!f.until || s.at < f.until.getTime());
+    if (inGoals && inWindow) kept.add(task);
+  }
+  const open = (task: string, s: { goal: string; at: number }, t: number) =>
+    s.at <= t && !((shelvedAt.get(task) ?? Infinity) < t) && !(mergesOf.get(s.goal) ?? []).some((m) => m >= s.at && m < t);
+  return events.filter((e) => {
+    if (e.type === "escalate" && e.task) return kept.has(e.task);
+    if (e.type === "report.shown" || e.type === "approve" || e.type === "merge" || e.type === "escalate") {
+      const t = Date.parse(e.at);
+      return [...starts].some(([task, s]) => s.goal === e.goal && kept.has(task) && open(task, s, t));
+    }
+    return kept.has(e.task);
+  });
+}
+
+export function describeFilters(f: Filters): string {
+  const parts = [];
+  if (f.goals) parts.push(`目标 ${f.goals.join("、")}`);
+  if (f.since) parts.push(`自 ${f.since.toISOString()} 起`);
+  if (f.until) parts.push(`至 ${f.until.toISOString()} 前`);
+  return parts.join("；");
+}
+
 export type Ratio = { n: number; of: number; rate: number | null };
 const ratio = (n: number, of: number): Ratio => ({ n, of, rate: of ? n / of : null });
 
@@ -126,9 +186,27 @@ export function stats(events: Event[], now = new Date()) {
 
 const pct = (r: Ratio) => `${r.rate === null ? "—" : `${(r.rate * 100).toFixed(0)}%`}（${r.n}/${r.of}）`;
 
-export function render(s: ReturnType<typeof stats>): string {
+const csvField = (v: string | number | boolean) => {
+  const t = String(v);
+  return /[",\r\n]/.test(t) ? '"' + t.replaceAll('"', '""') + '"' : t;
+};
+
+/** RFC 4180: a header and one record per task, each ended by CRLF. */
+export function toCsv(rs: TaskRow[]): string {
+  const header = ["task", "goal", "title", "difficulty", "model", "status", "started_at", "merged_at", "lines", "cost_usd", ...GATES.flatMap((g) => [`${g}_pass`, `${g}_fail`]), "escaped"];
+  const records = rs.map((r) => [
+    r.task, r.goal, r.title, r.difficulty, r.model, r.status, r.started_at, r.merged_at ?? "", r.size?.lines ?? "", r.cost_usd,
+    ...GATES.flatMap((g) => [r.gates[g]?.pass ?? 0, r.gates[g]?.fail ?? 0]), r.escaped,
+  ]);
+  return [header, ...records].map((rec) => rec.map(csvField).join(",") + "\r\n").join("");
+}
+
+export function render(s: ReturnType<typeof stats>, filters: Filters = {}): string {
+  const applied = describeFilters(filters);
+  const heading = `# M0 记账：${s.tasks} 个任务${applied ? `（${applied}）` : ""}`;
+  if (!s.tasks) return `${heading}\n\n没有符合条件的任务。\n`;
   const lines = [
-    `# M0 记账：${s.tasks} 个任务`,
+    heading,
     "",
     s.conclusive ? "" : `**不满 ${MIN_TASKS_FOR_CONCLUSIONS} 个任务，不下结论。**\n`,
     `模型：${s.models.join("、") || "—"}`,
