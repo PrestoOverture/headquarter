@@ -95,6 +95,27 @@ describe("--since / --until", () => {
     expect(early.caught_by_gate.self_test).toMatchObject({ n: 1, of: 1 });
   });
 
+  test("goal-level events from before the window or of tasks outside it are not counted", () => {
+    start("r1", "r", day(40));
+    put(day(40, 1), { type: "escalate", goal: "r", task: "r1", why: "unclear", minutes: 30 });
+    put(day(41), { type: "approve", goal: "r", commit: "c1", active_s: 600 });
+    put(day(42), { type: "merge", goal: "r", commit: "c1", merge_commit: "m1" });
+    start("r2", "r", day(45));
+    put(day(46), { type: "approve", goal: "r", commit: "c2", active_s: 60 });
+    put(day(47), { type: "merge", goal: "r", commit: "c2", merge_commit: "m2" });
+
+    const s = json("--goal", "r", "--since", "2026-11-13"); // day 43: r1 (day 40) is out, r2 (day 45) is in
+    expect(s.tasks).toBe(1);
+    expect(s.escalation_rate).toMatchObject({ n: 0, of: 1 }); // r1's escalation names a task that is not kept
+    expect(s.total_active_s).toBe(60); // r1's 600 s approve predates r2's start
+    expect(s.pass_rate).toMatchObject({ n: 1, of: 1 });
+    expect(s.active_s_per_merged).toBe(60);
+
+    const all = json("--goal", "r"); // no time window: everything of the goal
+    expect(all.escalation_rate).toMatchObject({ n: 1, of: 2 });
+    expect(all.total_active_s).toBe(600 + 1800 + 60);
+  });
+
   test("a time zone offset moves the bound", () => {
     expect(tasks("--since", "2026-10-03T08:00:00+08:00")).toEqual(["a2"]); // = 2026-10-03T00:00Z
     expect(tasks("--since", "2026-10-03T09:00:00+08:00")).toEqual(["a2"]);
@@ -160,13 +181,14 @@ describe("--csv", () => {
     const lines = statsCommand(repo, ["--csv", "--goal", "a"]).split("\r\n");
     expect(lines[0]).toBe(
       "task,goal,title,difficulty,model,status,started_at,merged_at,lines,cost_usd," +
-        "self_test_pass,self_test_fail,full_tests_pass,full_tests_fail,codex_review_pass,codex_review_fail,claude_diff_pass,claude_diff_fail",
+        "self_test_pass,self_test_fail,full_tests_pass,full_tests_fail,codex_review_pass,codex_review_fail,claude_diff_pass,claude_diff_fail,escaped",
     );
     expect(lines[1]).toBe(
-      `a1,a,a1,medium,claude-sonnet-5-5,merged,${day(0).toISOString()},${day(7, 2).toISOString()},15,1,0,1,0,0,1,0,0,0`,
+      `a1,a,a1,medium,claude-sonnet-5-5,merged,${day(0).toISOString()},${day(7, 2).toISOString()},15,1,0,1,0,0,1,0,0,0,true`,
     );
     expect(lines[2]).toStartWith("a2,a,a2,medium,claude-sonnet-5-5,merged,");
     expect(lines[2]).toContain(",,4,"); // no size recorded: empty lines field; cost 4
+    expect(lines[2]).toEndWith(",0,0,false"); // a2 never needed rework
     expect(lines[3]).toBe(""); // every record, the last included, ends with CRLF
     expect(lines).toHaveLength(4);
   });
@@ -178,7 +200,7 @@ describe("--csv", () => {
     expect(out).toContain('"Add ""stats"", filters"');
     expect(out).toContain('"two\nlines"');
     expect(parseCsv(out).slice(1).map((r) => r[2])).toEqual(titles);
-    expect(parseCsv(out).every((r) => r.length === 18)).toBe(true);
+    expect(parseCsv(out).every((r) => r.length === 19)).toBe(true);
   });
 });
 

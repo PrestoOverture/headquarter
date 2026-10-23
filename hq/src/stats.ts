@@ -47,9 +47,11 @@ export function parseDate(text: string, flag: string): Date {
 }
 
 /**
- * Keeps the tasks of the goals (--goal) that started in [since, until), all events of those
- * tasks, and the goal-level events (report shown, approve, merge, escalate) of their goals.
- * With a time window the goals are those of the kept tasks; with only --goal, those named.
+ * Keeps the tasks of the goals (--goal) that started in [since, until) and all events of those
+ * tasks. A goal-level event (report shown, approve, merge, escalate) is kept when its goal has a
+ * kept task and, under a time window, it is at or after the earliest start of that goal's kept
+ * tasks; an escalate that names a task is kept only with that task. Goal-level events from before
+ * or outside the window thus never feed the numerators of tasks that are not counted.
  */
 export function filterEvents(events: Event[], f: Filters): Event[] {
   const timed = f.since !== undefined || f.until !== undefined;
@@ -63,9 +65,17 @@ export function filterEvents(events: Event[], f: Filters): Event[] {
     if (inGoals && inWindow) kept.set(e.task, e.goal);
     else kept.delete(e.task);
   }
-  const goals = timed ? new Set(kept.values()) : new Set(f.goals);
+  const floor = new Map<string, number>(); // goal → earliest start among its kept tasks
+  for (const e of events) {
+    if (e.type !== "task.start" || !kept.has(e.task)) continue;
+    floor.set(e.goal, Math.min(floor.get(e.goal) ?? Infinity, Date.parse(e.at)));
+  }
   return events.filter((e) => {
-    if (e.type === "report.shown" || e.type === "approve" || e.type === "merge" || e.type === "escalate") return goals.has(e.goal);
+    if (e.type === "escalate" && e.task) return kept.has(e.task);
+    if (e.type === "report.shown" || e.type === "approve" || e.type === "merge" || e.type === "escalate") {
+      const from = floor.get(e.goal);
+      return from !== undefined && (!timed || Date.parse(e.at) >= from);
+    }
     return kept.has(e.task);
   });
 }
@@ -175,17 +185,17 @@ export function stats(events: Event[], now = new Date()) {
 
 const pct = (r: Ratio) => `${r.rate === null ? "—" : `${(r.rate * 100).toFixed(0)}%`}（${r.n}/${r.of}）`;
 
-const csvField = (v: string | number) => {
+const csvField = (v: string | number | boolean) => {
   const t = String(v);
   return /[",\r\n]/.test(t) ? '"' + t.replaceAll('"', '""') + '"' : t;
 };
 
 /** RFC 4180: a header and one record per task, each ended by CRLF. */
 export function toCsv(rs: TaskRow[]): string {
-  const header = ["task", "goal", "title", "difficulty", "model", "status", "started_at", "merged_at", "lines", "cost_usd", ...GATES.flatMap((g) => [`${g}_pass`, `${g}_fail`])];
+  const header = ["task", "goal", "title", "difficulty", "model", "status", "started_at", "merged_at", "lines", "cost_usd", ...GATES.flatMap((g) => [`${g}_pass`, `${g}_fail`]), "escaped"];
   const records = rs.map((r) => [
     r.task, r.goal, r.title, r.difficulty, r.model, r.status, r.started_at, r.merged_at ?? "", r.size?.lines ?? "", r.cost_usd,
-    ...GATES.flatMap((g) => [r.gates[g]?.pass ?? 0, r.gates[g]?.fail ?? 0]),
+    ...GATES.flatMap((g) => [r.gates[g]?.pass ?? 0, r.gates[g]?.fail ?? 0]), r.escaped,
   ]);
   return [header, ...records].map((rec) => rec.map(csvField).join(",") + "\r\n").join("");
 }
