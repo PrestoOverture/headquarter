@@ -3,6 +3,8 @@ name: step0
 # write: Claude writes tests for each issue, without the gold data (stripped before the
 # agent starts). grade: the tests run on the buggy and the fixed code. summarize: catch rate.
 # With writer_runs set, the write job is skipped and grade reuses those runs' writer output.
+# An image that does not fit on the runner's disk is excluded_disk (eval/src/disk.ts); the
+# runner input picks a bigger runner to try again.
 
 on:
   workflow_dispatch:
@@ -26,6 +28,11 @@ on:
         type: choice
         options: ["false", "true"]
         default: "false"
+      runner:
+        description: runner for the write and grade jobs (the 16-core one has the disk for the biggest images)
+        type: choice
+        options: [ubuntu-latest, ubuntu-latest-16-cores]
+        default: ubuntu-latest
       writer_runs:
         description: grade only, using writer output from these run ids (space-separated)
         default: ""
@@ -56,7 +63,7 @@ jobs:
   write:
     needs: plan
     if: inputs.writer_runs == ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -84,6 +91,7 @@ jobs:
           STEP0_ID: ${{ matrix.id }}
           STEP0_MODEL: ${{ inputs.model }}
           STEP0_PROMPT: ${{ inputs.prompt }}
+          STEP0_RUNNER: ${{ inputs.runner }}
         run: bun src/write.ts --tasks tasks/public.json --id "$STEP0_ID" --out results --model "$STEP0_MODEL" --prompt "$STEP0_PROMPT"
       - name: Upload writer output
         if: always()
@@ -96,7 +104,7 @@ jobs:
   grade:
     needs: [plan, write]
     if: always() && needs.plan.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -133,8 +141,9 @@ jobs:
         env:
           STEP0_ID: ${{ matrix.id }}
           STEP0_MUTANTS: ${{ inputs.mutants }}
+          STEP0_RUNNER: ${{ inputs.runner }}
         run: |
-          if [ ! -f "results/$STEP0_ID/write.json" ]; then echo "no writer output"; exit 1; fi
+          if [ ! -f "results/$STEP0_ID/write.json" ] && [ ! -f "results/$STEP0_ID/report.json" ]; then echo "no writer output"; exit 1; fi
           flags=()
           if [ "$STEP0_MUTANTS" = "true" ]; then flags+=(--mutants); fi
           bun src/grade.ts --tasks tasks/tasks.json.gz --id "$STEP0_ID" --results results "${flags[@]}"

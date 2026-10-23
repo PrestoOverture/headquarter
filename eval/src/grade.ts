@@ -11,10 +11,15 @@
 // With --mutants, a caught task also gets its gold patch graded minus one hunk at a time
 // (mutants.ts): the same run on each mutant, logged to mutant-<n>.log. report.json is
 // written with the verdict first and rewritten after each mutant.
+//
+// An image that does not fit on the runner (disk.ts) gets the verdict excluded_disk; the
+// write job may already have recorded that, in which case there is no write.json and the
+// report stays as it is.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { excludedForDisk, excludedReport, gb } from "./disk";
 import { SCRIPT, type Side, verdict } from "./judge";
 import { gradeMutants } from "./mutants";
 import { run, sh, tail } from "./sh";
@@ -99,12 +104,20 @@ function main() {
   const runDir = join(values.results, task.instance_id);
   const patchPath = join(runDir, "writer.patch");
   const writerPatch = existsSync(patchPath) ? readFileSync(patchPath, "utf8") : "";
+  const reportPath = join(runDir, "report.json");
+  if (!existsSync(join(runDir, "write.json")) && existsSync(reportPath) && JSON.parse(readFileSync(reportPath, "utf8")).verdict === "excluded_disk")
+    return console.log(`${task.instance_id}: excluded_disk (recorded by the write job)`);
 
   let buggy: ReturnType<typeof gradeSide> | null = null;
   let fixed: ReturnType<typeof gradeSide> | null = null;
   // Without sides, the verdict stops at the first submission problem; "patch_failed"
   // means the submission itself is fine and only running it can tell.
   if (verdict(writerPatch, task.patch, null, null) === "patch_failed") {
+    const excluded = excludedForDisk(task.image, task.platform);
+    if (excluded) {
+      writeFileSync(reportPath, JSON.stringify(excludedReport(task, excluded), null, 2) + "\n");
+      return console.log(`${task.instance_id}: excluded_disk (needs ${gb(excluded.needed_bytes)} GB, ${gb(excluded.free_bytes)} GB free)`);
+    }
     sh(["docker", "pull", "--platform", task.platform, task.image], { timeoutMs: 60 * 60 * 1000 });
     buggy = gradeSide(task, writerPatch, false, join(runDir, "buggy.log"));
     fixed = gradeSide(task, writerPatch, true, join(runDir, "fixed.log"));
@@ -119,7 +132,7 @@ function main() {
     fixed,
   };
   // The verdict is on disk before any mutant runs; each mutant rewrites the report.
-  const save = (mutation?: object) => writeFileSync(join(runDir, "report.json"), JSON.stringify({ ...report, ...mutation }, null, 2) + "\n");
+  const save = (mutation?: object) => writeFileSync(reportPath, JSON.stringify({ ...report, ...mutation }, null, 2) + "\n");
   save();
   const mutation =
     values.mutants && final === "caught"

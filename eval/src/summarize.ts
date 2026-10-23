@@ -1,12 +1,13 @@
 // Catch rate over every graded task (roadmap 第 0 步 stop line: below half, fix the writer
 // before moving on). Invalid submissions count as misses: the writer failed to produce a
-// usable test. Tasks with no report (writer or grade job crashed) or a grade_error are
-// listed, not counted. Reports graded with --mutants also give a mutation score.
+// usable test. Tasks with no report (writer or grade job crashed), a grade_error or an
+// excluded_disk (image too big for the runner) are listed, not counted. Reports graded with --mutants also give a mutation score.
 //
 //   bun src/summarize.ts <results dir>    → summary.json in that dir, Markdown on stdout
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { gb, type DiskCheck } from "./disk";
 import type { Verdict } from "./judge";
 import type { MutantRecord, MutantResult } from "./mutants";
 
@@ -15,6 +16,7 @@ export type Report = {
   language: string;
   verdict: Verdict;
   graded_at?: string;
+  disk?: DiskCheck; // only on excluded_disk
   mutants?: MutantRecord[]; // only on caught tasks graded with --mutants
   mutants_left_out?: number;
   mutants_skipped?: string; // why no mutants were built: the gold patch was not fully understood
@@ -46,7 +48,7 @@ export function summarize(reports: Report[], missing: string[]) {
   const counts: Partial<Record<Verdict, number>> = {};
   for (const r of reports) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
   const caught = counts.caught ?? 0;
-  const graded = reports.length - (counts.grade_error ?? 0);
+  const graded = reports.length - (counts.grade_error ?? 0) - (counts.excluded_disk ?? 0);
   return {
     graded,
     caught,
@@ -54,6 +56,7 @@ export function summarize(reports: Report[], missing: string[]) {
     passes_stop_line: graded ? caught / graded >= 0.5 : null,
     counts,
     mutation: mutationScore(reports),
+    excluded_disk: reports.filter((r) => r.verdict === "excluded_disk").map((r) => ({ instance_id: r.instance_id, ...r.disk })),
     missing,
     by_task: Object.fromEntries(reports.map((r) => [r.instance_id, r.verdict])),
   };
@@ -86,6 +89,10 @@ export function markdown(s: ReturnType<typeof summarize>): string {
       `\n### Mutation score ${score} (killed ${mu.killed}/${mu.denominator} = killed + survived)\n`,
       `${mu.tasks} tasks graded; flaky ${mu.flaky}, apply_failed ${mu.apply_failed}, build_failed ${mu.build_failed}, not_graded ${mu.not_graded}; mutants_left_out (cap) ${mu.mutants_left_out}; no mutants (single hunk): ${mu.tasks_without_mutants.join(", ") || "none"}; skipped (patch not understood): ${mu.tasks_skipped.join(", ") || "none"}`,
     );
+  }
+  if (s.excluded_disk.length) {
+    lines.push("\n### Excluded: image does not fit on the runner (in no count or rate)\n", "| task | needs GB | free GB | runner |\n| --- | --- | --- | --- |");
+    for (const e of s.excluded_disk) lines.push(`| ${e.instance_id} | ${e.needed_bytes === undefined ? "?" : gb(e.needed_bytes)} | ${e.free_bytes === undefined ? "?" : gb(e.free_bytes)} | ${e.runner ?? "?"} |`);
   }
   if (s.missing.length) lines.push(`\nNo report (job failed): ${s.missing.join(", ")}`);
   return lines.join("\n");
