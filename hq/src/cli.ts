@@ -16,6 +16,7 @@
 //   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>]
 //   hq task gate <task> <self_test|full_tests|codex_review|claude_diff> <pass|fail> [--claimed-done] [--note <text>]
 //   hq task cost <task> <usd> [--model <id>]
+//   hq task cost <task> --from <file> [--model <id>]   total_cost_usd of the result line(s) in a stream-json log or json result
 //   hq task lines <task> [--rev <rev>]
 //   hq task shelve <task> --why <text>
 //   hq task cause <task> <cheat|misunderstanding|other> [--note <text>]
@@ -32,6 +33,7 @@ import { escapeCandidates, render as renderEscapes } from "./escape";
 import { git, revParse } from "./git";
 import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
+import { recordCostFrom } from "./cost";
 import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { recordLines } from "./lines";
 import { merge } from "./merge";
@@ -111,6 +113,7 @@ export function record(cwd: string, args: string[]): string {
       goal: { type: "string" }, title: { type: "string" }, difficulty: { type: "string", default: "medium" },
       model: { type: "string" }, base: { type: "string" }, "claimed-done": { type: "boolean", default: false },
       note: { type: "string" }, rev: { type: "string" }, why: { type: "string" }, task: { type: "string" }, minutes: { type: "string" },
+      from: { type: "string" },
     },
   });
   const [cmd, sub, ...rest] = p;
@@ -147,6 +150,11 @@ export function record(cwd: string, args: string[]): string {
       });
       return `gate recorded for task ${task}`;
     case "cost": {
+      if (o.from !== undefined) {
+        if (rest[1] !== undefined) throw new Error("give <usd> or --from, not both");
+        const e = recordCostFrom(cwd, task, o.from, o.model);
+        return `cost recorded for task ${task}: $${e.usd.toFixed(4)}${e.model ? ` (${e.model})` : ""}`;
+      }
       const usd = Number(rest[1]);
       if (!(usd >= 0)) throw new Error("<usd> must be a number");
       append(cwd, { type: "task.cost", task, usd, model: o.model });
