@@ -114,46 +114,14 @@ export function newKinds(cwd: string, added: string[]): string[] {
 }
 
 // CSI: ESC [ parameter bytes, intermediate bytes, final byte. OSC: ESC ] text, ended by BEL or ESC \.
-const ESCAPE = /\x1b\[([\x30-\x3f]*)([\x20-\x2f]*)([\x40-\x7e])|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)/y;
+const ESCAPE = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b\r\n]*(?:\x07|\x1b\\)/g;
 
-/** One line as a terminal ends up showing it: \r returns to column 0, later characters overwrite, erase-in-line applies. */
-function cleanLine(line: string): string {
-  if (!line.includes("\x1b") && !line.includes("\r")) return line;
-  const cells: string[] = [];
-  let col = 0;
-  for (let i = 0; i < line.length; ) {
-    if (line[i] === "\x1b") {
-      ESCAPE.lastIndex = i;
-      const m = ESCAPE.exec(line);
-      if (m) {
-        if (m[3] === "K" && m[2] === "") {
-          if (m[1] === "" || m[1] === "0") cells.length = Math.min(cells.length, col);
-          else if (m[1] === "1") for (let j = 0; j <= col && j < cells.length; j++) cells[j] = " ";
-          else if (m[1] === "2") cells.length = 0;
-        }
-        i += m[0].length;
-        continue;
-      }
-    }
-    if (line[i] === "\r") {
-      col = 0;
-      i++;
-      continue;
-    }
-    const ch = String.fromCodePoint(line.codePointAt(i)!);
-    while (cells.length < col) cells.push(" ");
-    cells[col++] = ch;
-    i += ch.length;
-  }
-  return cells.join("");
-}
-
-/** Test output as a person saw it: escape sequences gone, each line down to what the terminal shows. Nothing else changes. */
+/** Test output with escape sequences gone and every \r (or \r\n) a line break, so nothing printed is overwritten or hidden. */
 export function cleanTerminal(text: string): string {
-  return text.split("\n").map(cleanLine).join("\n");
+  return text.replace(ESCAPE, "").replace(/\r\n?/g, "\n");
 }
 
-/** Cleans each stream on its own, so a \r opening stderr cannot reach back into stdout's last line. */
+/** Cleans each stream on its own and puts a line break between them when stdout does not end with one. */
 function cleanStreams(out: string, err: string): string {
   const o = cleanTerminal(out);
   return o && err && !o.endsWith("\n") ? `${o}\n${cleanTerminal(err)}` : o + cleanTerminal(err);

@@ -144,30 +144,28 @@ test("OSC sequences are removed, ended by BEL or by ESC \\", () => {
   expect(block(mdFor(out))).toBe("running\na.ts:3");
 });
 
-test("a line rewritten with \\r shows its final text; CRLF ends are just line ends", () => {
+test("every \\r is a line break and a CRLF pair is one, so progress shows as several lines", () => {
   const out = "progress 10%\rprogress 50%\rprogress 100%\ndone\r\nlong line here\r\x1b[Kshort\n";
-  expect(block(mdFor(out))).toBe("progress 100%\ndone\nshort");
+  expect(block(mdFor(out))).toBe("progress 10%\nprogress 50%\nprogress 100%\ndone\nlong line here\nshort");
 });
 
-test("\\r overwrites column by column; characters it does not reach stay", () => {
-  expect(cleanTerminal("long\rab")).toBe("abng");
-  expect(cleanTerminal("abcdef\rxy")).toBe("xycdef");
-  expect(cleanTerminal("WARN: 40 tests skipped\rok")).toBe("okRN: 40 tests skipped");
-  expect(cleanTerminal("abc\r\r\rx\ry\n")).toBe("ybc\n");
+test("nothing a \\r follows is overwritten or dropped", () => {
+  expect(cleanTerminal("abcdef\rxy")).toBe("abcdef\nxy");
+  expect(cleanTerminal("测试完成\rOK")).toBe("测试完成\nOK");
+  expect(cleanTerminal("a\tb\rc\td")).toBe("a\tb\nc\td");
+  expect(cleanTerminal("WARN: 40 tests skipped\rok")).toBe("WARN: 40 tests skipped\nok");
+  expect(cleanTerminal("a\r\nb\r\n\r\nc\r")).toBe("a\nb\n\nc\n");
+  expect(cleanTerminal("abc\r\r\rx")).toBe("abc\n\n\nx");
 });
 
-test("erase-in-line applies at the cursor, combined with \\r", () => {
-  expect(cleanTerminal("abcdef\rxy\x1b[K")).toBe("xy");
-  expect(cleanTerminal("abcdef\rxy\x1b[0K")).toBe("xy");
-  expect(cleanTerminal("abcdef\rxy\x1b[1K")).toBe("   def");
-  expect(cleanTerminal("abcdef\rxy\x1b[2K")).toBe("");
-  expect(cleanTerminal("abcdef\rxy\x1b[2Kz")).toBe("  z");
-  expect(cleanTerminal("abcdef\r\x1b[2Kz")).toBe("z");
-  expect(cleanTerminal("abcdef\r\x1b[Kz\n")).toBe("z\n");
+test("erase-in-line sequences are stripped and have no other effect", () => {
+  expect(cleanTerminal("abcdef\rxy\x1b[K")).toBe("abcdef\nxy");
+  expect(cleanTerminal("abcdef\r\x1b[2Kz")).toBe("abcdef\nz");
+  expect(cleanTerminal("abc\x1b[1Kdef\x1b[0K")).toBe("abcdef");
 });
 
-test("stdout without a final newline and stderr opening with \\r stay apart", () => {
-  expect(block(mdFor("running 3 tests", "\r\x1b[2Kwarning: slow\n"))).toBe("running 3 tests\nwarning: slow");
+test("stdout without a final newline and stderr stay on separate lines", () => {
+  expect(block(mdFor("running 3 tests", "warning: slow\n"))).toBe("running 3 tests\nwarning: slow");
   expect(block(mdFor("a\n", "b\n"))).toBe("a\nb");
 });
 
@@ -185,7 +183,7 @@ test("cleaning the block leaves the raw output that writeReport saves untouched"
   const head = "a".repeat(40);
   const path = writeReport(repo, { goal: "x", commit: head, base: head, trial_merge: head, test_code: 0, generated_at: "now" }, mdFor(raw), raw);
   expect(readFileSync(path.replace(/\.md$/, ".test.log"), "utf8")).toBe(raw);
-  expect(block(readFileSync(path, "utf8"))).toBe("ok\n100%\nend");
+  expect(block(readFileSync(path, "utf8"))).toBe("ok\n10%\n100%\nend");
 });
 
 withSandbox("the saved .test.log keeps the raw output byte for byte", () => {
@@ -194,7 +192,7 @@ withSandbox("the saved .test.log keeps the raw output byte for byte", () => {
   const r = report(repo, "x");
   const raw = "\x1b[32mok\x1b[0m\n10%\r100%\n\x1b]0;t\x07end\n";
   expect(readFileSync(r.path.replace(/\.md$/, ".test.log"), "utf8")).toBe(raw);
-  expect(block(r.markdown)).toBe("ok\n100%\nend");
+  expect(block(r.markdown)).toBe("ok\n10%\n100%\nend");
 });
 
 test("approve shows the report and the prompt through the writer it is given", () => {
