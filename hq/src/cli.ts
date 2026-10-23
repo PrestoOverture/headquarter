@@ -4,6 +4,9 @@
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
 //   hq merge <goal>       merge an approved goal into main after the full tests pass
+//   hq install [<rev>]    install hq/ from main (or <rev>) as the version that runs (M0.4)
+//   hq rollback           go back to the previously installed version
+//   hq version            the installed current and previous versions
 //   hq install-hook       install the main-ref guard into this repository's git hooks
 //   hq guard              (called by the hook)
 //
@@ -25,6 +28,7 @@ import { guard, installHook } from "./guard";
 import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
+import { install, installed, launcherPath, rollback } from "./versions";
 import { render, rows, stats } from "./stats";
 
 /** One line typed on the controlling terminal. An agent's shell has none, so it cannot answer. */
@@ -166,10 +170,25 @@ async function main(argv: string[]): Promise<number> {
         return 1;
       }
       console.log(`merged goal ${goal} into ${MAIN} as ${r.mergeCommit.slice(0, 12)}\nto take it back out: ${r.revert}`);
+      if (r.reinstalled) console.log(`hq changed: installed ${r.reinstalled.slice(0, 12)} (hq rollback to undo)`);
+      if (r.reinstallError) console.error(`hq changed but reinstalling failed; still running ${installed("current")}: ${r.reinstallError}`);
+      return 0;
+    }
+    if (cmd === "install") {
+      const c = install(cwd, goal);
+      console.log(`installed hq ${c.slice(0, 12)} at ${launcherPath()}; previous: ${installed("previous") ?? "none"}`);
+      return 0;
+    }
+    if (cmd === "rollback") {
+      console.log(`rolled back to hq ${rollback()}`);
+      return 0;
+    }
+    if (cmd === "version") {
+      console.log(`current: ${installed("current") ?? "none"}\nprevious: ${installed("previous") ?? "none"}\nrunning: ${import.meta.path}`);
       return 0;
     }
     if (cmd === "install-hook") {
-      console.log(`installed ${installHook(cwd, process.execPath, import.meta.path)}`);
+      console.log(`installed ${installHook(cwd, launcherPath())}`);
       return 0;
     }
     if (cmd === "guard") return await guard(cwd);
@@ -188,7 +207,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq report|approve|merge <goal> | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
+  console.error("usage: hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
   return 2;
 }
 

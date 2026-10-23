@@ -49,14 +49,16 @@ export async function guard(cwd: string): Promise<number> {
   return 0;
 }
 
-export function hookScript(bun: string, cli: string): string {
-  return `#!/bin/bash\n${MARK}\n[ "$1" = prepared ] || exit 0\nexec "${bun}" "${cli}" guard\n`;
+/** The hook runs the installed launcher (M0.4), not the source in this repository. */
+export function hookScript(launcher: string): string {
+  return `#!/bin/bash\n${MARK}\n[ "$1" = prepared ] || exit 0\nexec "${launcher}" guard\n`;
 }
 
-export function installHook(cwd: string, bun: string, cli: string): string {
+export function installHook(cwd: string, launcher: string): string {
+  if (!existsSync(launcher)) throw new Error(`no launcher at ${launcher}: run \`hq install\` first`);
   const path = join(commonDir(cwd), "hooks", "reference-transaction");
   if (existsSync(path) && !readFileSync(path, "utf8").includes(MARK)) throw new Error(`${path} exists and is not hq's; merge it by hand`);
-  writeFileSync(path, hookScript(bun, cli));
+  writeFileSync(path, hookScript(launcher));
   chmodSync(path, 0o755);
   return path;
 }

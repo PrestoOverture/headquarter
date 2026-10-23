@@ -11,10 +11,11 @@ import { consumeApproval, goalBranch, MAIN, readApproval } from "./approval";
 import { commonDir, git, revParse, run, worktreeOf } from "./git";
 import { append } from "./ledger";
 import { sandboxed } from "./sandbox";
+import { reinstallIfChanged } from "./versions";
 
 export type Config = { test: string; sensitive?: string[] };
 export type MergeResult =
-  | { ok: true; mergeCommit: string; revert: string; testOutput: string }
+  | { ok: true; mergeCommit: string; revert: string; testOutput: string; reinstalled: string | null; reinstallError?: string }
   | { ok: false; reason: string; testOutput?: string };
 
 /** The config comes from main, so a goal cannot weaken the tests it is judged by. */
@@ -73,6 +74,14 @@ export function merge(cwd: string, goal: string): MergeResult {
     else git(["update-ref", `refs/heads/${MAIN}`, merged, base], cwd);
     consumeApproval(cwd, goal, merged);
     append(cwd, { type: "merge", goal, commit: head, merge_commit: merged });
-    return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput };
+    // D44: a goal that changed hq takes effect only now, from the merged main.
+    let reinstalled: string | null = null;
+    let reinstallError: string | undefined;
+    try {
+      reinstalled = reinstallIfChanged(cwd, base, merged);
+    } catch (e) {
+      reinstallError = (e as Error).message;
+    }
+    return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput, reinstalled, reinstallError };
   });
 }

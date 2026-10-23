@@ -1,0 +1,3 @@
+[test]
+# Sandboxed trial merges take several seconds each.
+timeout = 30000

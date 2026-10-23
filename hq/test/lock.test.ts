@@ -15,6 +15,12 @@ import { writeReport } from "../src/report";
 import { sandboxed } from "../src/sandbox";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
+/** The hook runs a launcher; here one that runs this checkout's source. */
+function launcher(): string {
+  const p = join(root, "hq-launcher");
+  writeFileSync(p, `#!/bin/bash\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
+  return p;
+}
 // srt cannot start inside srt, so tests that run the executor sandbox are skipped when
 // this suite itself runs in one (hq merge's pre-merge run). Changes to the lock are
 // reviewed by hand anyway (roadmap D44); run `bun test` here outside the sandbox.
@@ -127,7 +133,7 @@ describe("the agent cannot get around the lock", () => {
   });
 
   test("outside the sandbox: the guard hook refuses main updates that are not approved merges", () => {
-    installHook(repo, process.execPath, CLI);
+    installHook(repo, launcher());
     const main = revParse("main", repo);
     const r = run(["git", "update-ref", "refs/heads/main", "goal/x"], repo);
     expect(r.code).not.toBe(0);
@@ -139,7 +145,7 @@ describe("the agent cannot get around the lock", () => {
 });
 
 withSandbox("approved and green: one merge commit on main, revertible in one command", () => {
-  installHook(repo, process.execPath, CLI);
+  installHook(repo, launcher());
   commit(wt, "notes.txt", "n\n", "task 2");
   const base = revParse("main", repo)!;
   typeAtTerminal("x");
