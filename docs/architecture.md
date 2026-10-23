@@ -12,6 +12,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/approval.ts     批准记录：~/.hq/approvals/<仓库>/，绑定一个 commit，合入后作废
   src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
   src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
+  src/replay.ts       重放任务（`hq replay <任务>`）：从任务记录的基线开新目标分支和 worktree，目标文件带原目标标题、该任务的验收标准和 replay_of；只读账本，打印原任务的大小和各关卡结果
   src/status.ts       总览（`hq status`）：每个目标分支的头、领先落后、报告与批准状态、未完成任务；只读
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
   src/clues.ts        报告风险栏的线索：goal 新增行里 main 没 import 过的模块、新的进程或网络调用，源码和测试文件分开；正则，只是线索
