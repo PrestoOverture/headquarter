@@ -2,6 +2,14 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-10-23 M0.0：沙箱前置验证通过
+
+- 做了什么：M0 计划写进 roadmap（M0 实施计划）。写了 `scripts/sandbox/check.ts` 和 `probe.sh`：在 linked worktree 里用 `claude -p`（Haiku）加沙箱设置跑探针，从工具结果里读结论，再从沙箱外核对 main、hooks、config。
+- 结果 / 数据：19 项全过：本仓库测试、worktree 里提交、起进程和杀进程树、临时目录、本地监听；hooks、config、main 的 ref、`packed-refs` 写不了；家目录写不了，`~/.ssh` 读不到，网络出不去。
+- 遇到的问题：沙箱默认不让监听端口，本仓库代理测试失败，加了 `allowLocalBinding`；macOS 的 `mktemp` 不读 `$TMPDIR`；`--allowedTools` 会吞掉后面的提示词，改从 stdin 传。
+- 学到的：执行者的 `.git` 不能整个只读，否则 worktree 提交失败；锁 main 只要 `denyWrite` 它的 ref 和 `packed-refs`。
+- 下一步：M0.1 合入锁。
+
 ## 2026-10-23 第 0 步全量：Sonnet 出题，51 题里抓住 42 题（82%）
 
 - 做了什么：61 题全部用 Sonnet 5.5（high）出题。首轮判卷后修了 runner（磁盘、判卷断网、重建超时 90 分钟、`NuGetAudit=false`、只重判模式 `writer_runs`），再用新判卷环境把已有的测试重判了一遍。出题共 12.4 美元。
@@ -31,6 +39,10 @@
 - 做了什么：第 0 步的考题从「自己仓库的 bug 修复提交」改成 SWE-bench-Live 上训练截止日之后的题，写进 roadmap。
 - 遇到的问题：自己的仓库没有成批、已知的 bug 修复提交；SWE-bench Verified 等静态题可能进了训练数据。
 - 下一步：确认出题者所用模型的训练截止日，按日期筛题，搭判卷脚本。
+
+## 2026-10-23 多 agent 平台设想入待定
+
+- 做了什么：对照设计确认「集成所有 agent、自由设置角色」不在 v1 范围内（D12 只接 Claude 和 Codex，D21 前端绑定 Claude Code，D38 不追求更多 agent），作为 P14 记入 roadmap，留到 v2。
 
 ## 2026-10-22 设计文档落地到 docs/
 
