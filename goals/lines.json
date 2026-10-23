@@ -1,6 +1,12 @@
 {
   "title": "Ledger checks each task's size (200-line rule)",
-  "acceptance": [],
+  "acceptance": [
+    "A task's size is the lines added plus lines deleted between its recorded base commit and an end commit, counting text files only, and leaving out goals/*.json and lockfiles (bun.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, Cargo.lock, go.sum)",
+    "When `hq merge` merges a goal, it records a `task.lines` event (added, deleted, end commit) for every task started on that goal that is not shelved, with the approved goal commit as the end commit",
+    "`hq task lines <task> [--rev <rev>]` records the same event by hand; the end commit defaults to the head of the task's goal branch, and it refuses a rev that is not a commit",
+    "`hq stats` shows how many tasks have a size, and lists the tasks under 200 lines with their size; tasks with no size are counted as not checked, never as passing. `hq stats --tasks` rows include the size",
+    "End-to-end tests in hq/test with a real git repository and a temporary HQ_HOME cover: the size rule and its exclusions, the event written by a real merge, the manual command and its refusals, and the stats output"
+  ],
   "shelved": [],
   "known_issues": []
 }
