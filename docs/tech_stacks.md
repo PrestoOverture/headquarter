@@ -152,12 +152,23 @@ flowchart LR
 - 以上规则在 Claude 执行者上有文档依据。Codex 执行者能否做到同样的隔离，还没核实（见下方待核实）。
 - **为什么判卷也要进沙箱**（D35）：判卷这些检查如果跑在沙箱外，答题者写一段读取 `~/.ssh` 再发出去的代码，测试一跑密钥就泄露了。（对 M0 的前置要求见 [roadmap.md](roadmap.md#里程碑)。）
 
+### 已核实（M0.0，2026-10-23，macOS）
+
+`bun scripts/sandbox/check.ts` 可重跑：在本仓库的 linked worktree 里用 `claude -p` 加下面的设置，让 Bash 工具跑 `scripts/sandbox/probe.sh`，再从沙箱外核对 main、hooks、config 没变。19 项全过。
+
+- **worktree 里能提交**：沙箱默认允许 linked worktree 写主仓库共用的 `.git`，`hooks/` 和 `config` 除外。所以执行者的 `.git` 不能整个设为只读：试过 `denyWrite` 整个 `.git`，提交失败在 `index.lock: Operation not permitted`。
+- **锁住 main 的写法**：`filesystem.denyWrite` 加上主仓库的 `refs/heads/main` 和 `packed-refs`。`git update-ref refs/heads/main`、直接写 ref 文件、写 `packed-refs` 都被拒，自己分支上的提交照常。hooks 和 config 由沙箱的保护路径挡住，不用另配。
+- **本地端口**：沙箱默认不让命令监听端口，本仓库测试里的代理要监听 127.0.0.1，所以加 `network.allowLocalBinding: true`。代价：在 macOS 上，命令也能连本机已经在监听的服务。
+- **网络**：`network.strictAllowlist: true` 加空的 `allowedDomains`，经代理和绕过代理都连不出去。
+- **临时目录**：沙箱把 `$TMPDIR` 设成 `/tmp/claude-<uid>`。macOS 自带的 `mktemp` 不带模板时不读 `$TMPDIR`，写 `/var/folders` 会被拒；`os.tmpdir()` 和 `mktemp "$TMPDIR/x.XXXXXX"` 正常。
+- **起进程、杀进程**：后台进程和进程树都能起、能杀。
+- **还没测**：`packed-refs` 被拒后，`git gc`、`git fetch`、删分支这类要重写它的命令会失败；main 只存在于 `packed-refs` 里、没有单独的 ref 文件时，新建 `refs/heads/main` 会不会被拒。M0.1 用 `reference-transaction` 钩子和合入前的核对兜底。
+
 ## 待核实
 
 - Codex 沙箱能否禁止读写指定路径（含 D30 的考场路径）、能否给密钥打掩码。不能的话，评估用 sandbox-runtime（srt）把 Codex 包起来。
-- 沙箱会不会挡住 worktree 里的 git 提交。
 - `tlsTerminate` 是否要求各工具信任代理的 CA 证书。
-- 无头的 `claude -p` 里，`allowedDomains` 以外的主机是放行还是拒绝。这决定「网络放开」怎么配。
+- 无头的 `claude -p` 里，`allowedDomains` 以外的主机是放行还是拒绝。这决定「网络放开」怎么配。已知：设了 `strictAllowlist` 就一律拒绝（M0.0 实测）；文档说 `bypassPermissions` 下不设它就放行；默认权限模式下的 `-p` 还没测。
 - 沙箱里连数据库（M2 开头接第二个仓库时验证，见 D44）：文档写明，多数数据库驱动不读代理变量，在沙箱里连不上，即使主机已放行（[沙箱文档](https://code.claude.com/docs/en/sandboxing)）。端到端测试要连真实数据库，所以这一条直接影响 P3。
 - 后台会话被 attach 时，mod 看板是否显示。
 - Gemini CLI 个人账号的条款（v2 前）。
