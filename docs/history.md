@@ -2,6 +2,23 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-10-23 第 0 步全量：Sonnet 出题，51 题里抓住 42 题（82%）
+
+- 做了什么：61 题全部用 Sonnet 5.5（high）出题。首轮判卷后修了 runner（磁盘、判卷断网、重建超时 90 分钟、`NuGetAudit=false`、只重判模式 `writer_runs`），再用新判卷环境把已有的测试重判了一遍。出题共 12.4 美元。
+- 结果 / 数据：能判的 51 题，抓住 42 题，抓住率 82.4%，过了一半的停止线。按语言：c 9/9、js 8/8、java 8/10、rust 7/10、cpp 6/8、cs 4/6。抓住的题都看过有 bug 一侧的日志：失败来自断言或 issue 描述的崩溃，不是构建失败。新判卷环境没改变任何一题的结论。
+- 漏掉的 9 题都是 `fails_on_fixed`，没有一题是「测试太弱、在有 bug 的代码上也通过」：
+  - 测得比 issue 宽（5 题：duckdb-24318、gitbutler-14920、lean-ctx-969、subtitleedit-12151、subtitleedit-12763）：测试在 issue 的复现外多要求了行为，gold 修复没覆盖。
+  - 绑死实现（2 题：obscura-479 断言 `Number(1)` 而修复后是 `Number(1.0)`；langchain4j-5755 调用一个猜的内部方法名，两边都编不过）。
+  - 在环境里编不过（btrace-897：用了离线缓存里没有的 junit-params，两边都编不过）。
+  - 原因待查（ducklake-1339：修复后 `ATTACH` 元数据库报 IO Error）。
+- 没算进分母的 10 题：
+  - 5 题镜像解压后超过标准 runner 的 58 GB 磁盘（biome ×3、lance-8049、pnpm-12935），标准 runner 跑不了。
+  - wolverine-3582、3608：NuGet 漏洞检查让数据集自带的还原命令失败，加了 `NuGetAudit=false` 但还没重判。
+  - duckdb-24290 重建超时、monero-10858 和 Mooncake-2964 判卷时 runner 被关停，还没重判成功。
+- 遇到的问题：私有仓库的 Actions 额度用完（「recent account payments have failed or your spending limit needs to be increased」），最后两次重判没能启动。
+- 学到的：PRD 担心出题者「测试太弱」，这一轮反过来：主要问题是测试比需求更严或绑死实现。出题提示词可以加一条「只断言 issue 描述的行为，不断言实现细节」。
+- 下一步：定第 0 步过不过；Actions 额度恢复后补判上面 5 题；定变异测试的做法。
+
 ## 2026-10-23 第 0 步首轮：Sonnet 出题 10 题，抓住 9 题
 
 - 做了什么：在 GitHub Actions 上跑第 0 步 runner（`eval/`、`.github/workflows/step0.yml`）。从 61 道题里按语言挑 10 题（rust、cpp、java、c 各 2，cs、js 各 1），出题者用 Sonnet 5.5（high）。
