@@ -2,6 +2,14 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-10-23 M0.5 任务 7：出题提示词 v2 与 A/B 工具，合入
+
+- 做了什么：`eval/src/writer_prompt_v2.md`（只断言 issue 描述的行为、不扩展复现、只用公开接口、先确认离线可用的测试库），`write.ts --prompt v1|v2`（默认 v1），step0 workflow 的 `prompt` 输入，`eval/ab/` 的漏题单和对照单，`eval/src/ab.ts` 逐题对比。三轮：第一轮 Claude 读 diff 拦下 workflow 的脚本注入（`${{ inputs.prompt }}` 直接拼进 `run:`，同一步有 OAuth token；同一行的 `inputs.model`、`matrix.id` 是我写 M0 workflow 时留下的同类漏洞，一起修）；第二轮又拦下「改用环境变量后 instance id 传进了出题者的环境，泄露 PR 编号」；第三轮全过。Codex 三轮都没发现这两处。你批准、合入：`8b34e88`。
+- 结果 / 数据：511 行；花费约 $3.4；主动时间见账本。A/B 还没跑（Actions 额度停着）。
+- 既有问题：出题者能列出 runner 上的 `eval/results/<instance_id>/` 看到 id（我写的 runner 的隔离缺口）；v2 的规则来自那 9 道漏题，A/B 在漏题上偏乐观，要看对照组。
+- 学到的：审查提示点名具体风险（注入、泄露）时，Claude 读 diff 都抓到了；Codex 的通用审查没有。修一个安全问题可能引出另一个（id 泄露），第二轮审查有用。
+- 下一步：任务 8（变异测试）。
+
 ## 2026-10-23 M0.5 任务 6：eval 合并多次 run 的结果，合入
 
 - 做了什么：第一个改 `eval/` 的任务，先给答题者启动器加了按目标设的 `scope` 和 `check`。`eval/src/merge-runs.ts`：读两种目录布局，每道题取最新判卷（`grade.ts` 从此写 `graded_at`，没有时按命令行顺序），没判卷的后续 run 不覆盖已判的，写 `sources.json`，输出目录非空或输入不存在时拒绝。四道关卡第一轮全过；拿夜里的真实第 0 步结果跑，抓住 42 题，和手工合并一致（多出的 3 题 fails_on_fixed 是我当时手工剔除的环境问题）。你批准、合入：`eaa5a12`；没改 `hq/`，所以没重装。
