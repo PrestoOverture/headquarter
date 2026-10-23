@@ -1,6 +1,15 @@
 {
   "title": "eval: mutation testing by reverting one gold-patch hunk at a time",
-  "acceptance": [],
+  "acceptance": [
+    "eval/src/mutants.ts splits a gold patch into hunks (every @@ hunk of every file) and builds one mutant per hunk: the gold patch with that one hunk left out, i.e. the fix minus one piece. A patch with a single hunk yields no mutants (the mutant would be the buggy code, which grading already covers). At most 8 mutants per task, chosen deterministically (first 8 in patch order), and the count left out is recorded",
+    "Every mutant is a valid unified diff that `git apply --check` accepts on the base tree: hunk headers stay correct after a hunk is removed, and leaving out the only hunk of a new or deleted file drops that file from the patch",
+    "`grade.ts --mutants` (off by default) grades each mutant only for tasks whose verdict is caught: fresh container, mutant patch plus writer patch, rebuild, the writer's script RERUNS times. Each mutant is `killed` (fails every run), `survived` (passes every run), `flaky` (runs disagree) or `apply_failed`; report.json gets a `mutants` list with each mutant's file, hunk header and result, and the rebuild exit codes",
+    "summarize() reports a mutation score: killed \u00f7 (killed + survived) over all graded mutants, with the denominator, plus the counts of flaky and apply_failed and the tasks with no mutants; tasks without mutation data never count as killed",
+    "The step0 workflow gets a `mutants` input (choice: false, true; default false) passed to grade.ts through a STEP0_ env var, never interpolated into a run: script",
+    "Tests in eval/test cover: splitting with several files and hunks, new and deleted files, hunk headers after removal (checked with git apply --check on a real temp repo), the 8-mutant cap, the per-mutant result rules, the summary score and its denominator, and the workflow input"
+  ],
   "shelved": [],
-  "known_issues": []
+  "known_issues": [],
+  "scope": "eval",
+  "check": "cd eval && bun test && bunx tsc --noEmit"
 }
