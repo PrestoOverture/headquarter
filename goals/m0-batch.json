@@ -8,7 +8,8 @@
     }
   ],
   "known_issues": [
-    "t10 hq review: the temporary branch name embeds the task id, so an id containing '..' (or other ref-invalid sequences) cannot run its review (Codex P2, round 2). Ids in use are tNN."
+    "t10 hq review: the temporary branch name embeds the task id, so an id containing '..' (or other ref-invalid sequences) cannot run its review (Codex P2, round 2). Ids in use are tNN.",
+    "t17 finding (answers tech_stacks 待核实 on Codex isolation, partly): run for real on 2026-10-24, Codex under srt with the executor rules and its API hosts allowed never reached its API (requests timed out, the probe never ran), while curl through the same srt proxy reached chatgpt.com (403) and api.openai.com (401). So Codex's HTTP client does not go through srt's proxy as configured; Codex cannot be sandboxed this way yet. codex-check.ts reports this honestly (exit 1) and cleans up; ~/.codex was untouched."
   ],
   "tasks": {
     "t09": {
