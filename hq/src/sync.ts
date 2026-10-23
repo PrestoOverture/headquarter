@@ -17,20 +17,26 @@ function paths(args: string[], wt: string): string[] {
 /** Paths main changes that are, or sit under or over, a file the worktree has untracked or ignored. A clean status hides those; the merge overwrites them (--no-overwrite-ignore does nothing in ort) or, on a conflict, loses them in the abort. */
 function untrackedInTheWay(wt: string, base: string, main: string): string[] {
   // --no-renames lists a rename as its deleted source and its added target, so every touched path appears.
-  const changed = new Set(paths(["diff", "--name-only", "--no-renames", "-z", base, main], wt));
-  const local = new Set([
-    ...paths(["ls-files", "--others", "-z"], wt),
-    ...paths(["ls-files", "--others", "--exclude-standard", "-z"], wt),
-    ...paths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], wt),
-  ]);
+  const changed = paths(["diff", "--name-only", "--no-renames", "-z", base, main], wt);
+  const local = [
+    ...new Set([
+      ...paths(["ls-files", "--others", "-z"], wt),
+      ...paths(["ls-files", "--others", "--exclude-standard", "-z"], wt),
+      ...paths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], wt),
+    ]),
+  ];
+  // On a case-insensitive file system Notes.md from main lands on a local notes.md.
+  const fold = run(["git", "config", "--type=bool", "core.ignorecase"], wt).out.trim() === "true" ? (p: string) => p.toLowerCase() : (p: string) => p;
+  const changedKeys = new Set(changed.map(fold));
+  const localKeys = new Set(local.map(fold));
   const parents = (p: string) => {
     const out: string[] = [];
-    for (let d = dirname(p); d !== "."; d = dirname(d)) out.push(d);
+    for (let d = dirname(p); d !== "."; d = dirname(d)) out.push(fold(d));
     return out;
   };
   const clash = new Set<string>();
-  for (const c of changed) if (local.has(c) || parents(c).some((d) => local.has(d))) clash.add(c);
-  for (const l of local) if (parents(l).some((d) => changed.has(d))) clash.add(l);
+  for (const c of changed) if (localKeys.has(fold(c)) || parents(c).some((d) => localKeys.has(d))) clash.add(c);
+  for (const l of local) if (parents(l).some((d) => changedKeys.has(d))) clash.add(l);
   return [...clash].sort();
 }
 
@@ -59,10 +65,19 @@ export function sync(cwd: string, goal: string): SyncResult {
   const clash = untrackedInTheWay(wt, git(["merge-base", main, before], cwd), main);
   if (clash.length) throw new Error(`${MAIN} changes paths where the worktree has untracked or ignored files, which the merge would overwrite or lose: ${clash.join(", ")}; move them away first`);
 
-  const m = run(["git", "merge", "--no-ff", "--no-edit","-m", `Merge ${MAIN} into ${branch}`, main], wt);
-  if (m.code === 0) return { ok: true, upToDate: false, before, head: git(["rev-parse", "HEAD"], wt), main };
+  // No rename detection of either kind: a rename must not move a file to a path `git diff <base> main` does not list, which the clash check above relies on. --commit overrides a configured branch.<goal>.mergeOptions=--no-commit.
+  const m = run(["git", "-c", "merge.directoryRenames=false", "merge", "--no-ff", "--commit", "-X", "no-renames", "--no-edit", "-m", `Merge ${MAIN} into ${branch}`, main], wt);
+  const mergeInProgress = () => run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], wt).code === 0;
+  if (m.code === 0) {
+    const [head, ...parents] = git(["rev-list", "--parents", "-1", "HEAD"], wt).split(" ");
+    if (!mergeInProgress() && parents.length === 2 && parents[0] === before && parents[1] === main) return { ok: true, upToDate: false, before, head, main };
+    // The worktree was clean and idle when sync started, so putting it back to `before` loses nothing.
+    if (mergeInProgress()) git(["merge", "--abort"], wt);
+    else git(["reset", "--hard", before], wt);
+    throw new Error(`git merge ${MAIN} did not make a merge commit of ${before.slice(0, 12)} and ${main.slice(0, 12)}; it was undone`);
+  }
   // Only undo a merge this command started; anything else that failed changed nothing.
-  if (run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], wt).code !== 0) throw new Error(`git merge ${MAIN}: ${(m.err || m.out).trim()}`);
+  if (!mergeInProgress()) throw new Error(`git merge ${MAIN}: ${(m.err || m.out).trim()}`);
   const conflicts = git(["diff", "--name-only", "--diff-filter=U"], wt).split("\n").filter(Boolean);
   git(["merge", "--abort"], wt);
   if (!conflicts.length) throw new Error(`git merge ${MAIN} failed and was aborted: ${(m.err || m.out).trim()}`);

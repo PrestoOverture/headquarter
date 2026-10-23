@@ -274,3 +274,50 @@ test("main modifying a file the goal deleted and the worktree has untracked (sta
   expect(readFileSync(join(wt, "app.txt"), "utf8")).toBe("local only\n");
   expect(state()).toBe(before);
 });
+
+test("a directory renamed on main with a file added to it on the goal moves nothing and touches no ignored file", () => {
+  mkdirSync(join(repo, "lib"));
+  writeFileSync(join(repo, "lib", "a.txt"), "a\n");
+  commit(repo, "lib/b.txt", "b\n", "main adds lib");
+  expect(hq(repo, "sync", "g").code).toBe(0);
+  commit(wt, ".gitignore", "src/new.txt\n", "ignore src/new.txt");
+  commit(wt, "lib/new.txt", "mine\n", "goal adds lib/new.txt");
+  git(["mv", "lib", "src"], repo);
+  git(["commit", "-q", "-m", "main renames lib to src"], repo);
+  mkdirSync(join(wt, "src"));
+  writeFileSync(join(wt, "src", "new.txt"), "local only\n");
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(0);
+  expect(readFileSync(join(wt, "lib", "new.txt"), "utf8")).toBe("mine\n");
+  expect(readFileSync(join(wt, "src", "new.txt"), "utf8")).toBe("local only\n");
+  expect(readFileSync(join(wt, "src", "a.txt"), "utf8")).toBe("a\n");
+  const tracked = git(["ls-tree", "-r", "--name-only", "HEAD"], wt).split("\n");
+  expect(tracked).toContain("lib/new.txt");
+  expect(tracked).not.toContain("src/new.txt");
+});
+
+test("with core.ignorecase, main adding Notes.md over an ignored notes.md is refused and the local file survives", () => {
+  git(["config", "core.ignorecase", "true"], repo);
+  commit(wt, ".gitignore", "notes.md\n", "ignore notes");
+  writeFileSync(join(wt, "notes.md"), "local only\n");
+  commit(repo, "Notes.md", "from main\n", "main adds Notes.md");
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("Notes.md");
+  expect(r.out).toBe("");
+  expect(readFileSync(join(wt, "notes.md"), "utf8")).toBe("local only\n");
+  expect(state()).toBe(before);
+});
+
+test("a configured mergeOptions=--no-commit still ends in a real merge commit", () => {
+  git(["config", "branch.goal/g.mergeOptions", "--no-commit"], repo);
+  const before = git(["rev-parse", "goal/g"], repo);
+  const main = commit(repo, "other.txt", "o2\n", "main moves");
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(0);
+  const head = git(["rev-parse", "goal/g"], repo);
+  expect(git(["rev-list", "--parents", "-1", head], repo).split(" ").slice(1)).toEqual([before, main]);
+  expect(existsSync(join(git(["rev-parse", "--absolute-git-dir"], wt), "MERGE_HEAD"))).toBe(false);
+  expect(git(["status", "--porcelain"], wt)).toBe("");
+});
