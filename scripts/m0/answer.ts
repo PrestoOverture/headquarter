@@ -6,7 +6,8 @@
 // Sandbox: the executor settings from M0.0 (scripts/sandbox/check.ts). File tools may not
 // read credential files. Do not deny reads of ~/.hq: Claude Code folds Read denials into
 // the sandbox, and the guard hook every commit runs lives there (task 1). Prints the
-// session's cost, turns and final message as JSON.
+// session's cost, turns and final message as JSON. goals/<goal>.json may set "scope" (the
+// directory the task works in, default hq) and "check" (the command the answerer must pass).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -22,6 +23,9 @@ const settings = {
 };
 const g = JSON.parse(readFileSync(join(wt, "goals", `${goal}.json`), "utf8"));
 const rework = notes ? `\n\n${readFileSync(notes, "utf8")}` : "";
+// A goal may name its own area and checks; hq/ is the default (tasks 1–5).
+const scope: string = g.scope ?? "hq";
+const check: string = g.check ?? `cd ${scope} && bun test && bunx tsc --noEmit`;
 const prompt = `You are working in ${wt}, a git worktree of this repository on branch goal/${goal}. Implement this goal:
 
 ${g.title}
@@ -30,9 +34,9 @@ Acceptance criteria:
 ${g.acceptance.map((a: string, i: number) => `${i + 1}. ${a}`).join("\n")}
 
 How to work:
-- Read docs/architecture.md and the existing code under hq/ first; match its style, naming, comment density and test style (hq/test/*.test.ts, real git in temp dirs).
-- Run \`cd hq && bun test && bunx tsc --noEmit\` and make both pass. Tests that need the sandbox runtime are skipped when SANDBOX_RUNTIME=1; that is expected.
-- Do not change files outside hq/ except docs/architecture.md if a new module needs a line there.
+- Read docs/architecture.md and the existing code under ${scope}/ first; match its style, naming, comment density and test style (${scope}/test/*.test.ts).
+- Run \`${check}\` and make it pass. Tests that need the sandbox runtime are skipped when SANDBOX_RUNTIME=1; that is expected.
+- Do not change files outside ${scope}/ except docs/architecture.md if a new module needs a line there.
 - Commit your work on the current branch with a clear message. Do not touch main.
 - When done, say in two or three sentences what you built and how you tested it.${rework}`;
 // A nested session must not look like a child of the one that launched it.
