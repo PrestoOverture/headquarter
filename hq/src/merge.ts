@@ -79,7 +79,9 @@ export function merge(cwd: string, goal: string): MergeResult {
     // main has moved: nothing here may fail the merge, only warn.
     const linesErrors: string[] = [];
     try {
-      for (const r of rows(readEvents(cwd)).filter((r) => r.goal === goal && r.status === "open")) {
+      // A task sized when it finished (hq task lines) keeps that size: measuring it up to the
+      // goal head would also count the tasks that came after it on the same goal.
+      for (const r of rows(readEvents(cwd)).filter((r) => r.goal === goal && r.status === "open" && !r.size)) {
         try {
           recordLines(cwd, r.task, head);
         } catch (e) {

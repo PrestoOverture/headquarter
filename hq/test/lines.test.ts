@@ -148,6 +148,21 @@ describe("hq merge", () => {
     expect(types.lastIndexOf("task.lines")).toBeLessThan(types.indexOf("merge"));
   });
 
+  withSandbox("a task sized when it finished keeps that size; the merge sizes only the others", () => {
+    startTask("first");
+    commit(wt, { "a.ts": nlines(5) });
+    record(repo, ["task", "lines", "first"]); // done: 5 lines
+    startTask("second");
+    commit(wt, { "b.ts": nlines(7) });
+    const head = approveGoal();
+    expect(merge(repo, "x")).toMatchObject({ ok: true, linesErrors: [] });
+    const sized = readEvents(repo).filter((e) => e.type === "task.lines");
+    expect(sized).toMatchObject([
+      { task: "first", added: 5, deleted: 0 },
+      { task: "second", added: 7, deleted: 0, end: head },
+    ]);
+  });
+
   withSandbox("a task whose base cannot be measured is reported, and the merge still stands", () => {
     startTask("open1");
     append(repo, { type: "task.start", task: "broken", goal: "x", title: "b", base: "0".repeat(40), difficulty: "medium", model: "m" });
