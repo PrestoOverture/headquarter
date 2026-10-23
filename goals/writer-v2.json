@@ -9,7 +9,10 @@
     "Tests in eval/test cover the v2 prompt's placeholders and rules, the --prompt option and the recorded version, and the comparison (fixed, broken, unchanged, missing ids, denominators)"
   ],
   "shelved": [],
-  "known_issues": [],
+  "known_issues": [
+    "Step-0 isolation hole (pre-existing, orchestrator's M0 runner): the writer runs on the Actions runner outside any sandbox and can list eval/results/<instance_id>/ (its own agent.jsonl is written there), so it can learn the instance id and PR number. Network to GitHub is blocked by the proxy, which limits the damage. Fix: write the run's outputs outside the checkout under an opaque name.",
+    "Reading the A/B: v2's rules were written from the 9 misses (the 1 vs 1.0 example is obscura-479's), so the misses list flatters v2; judge it on the controls too (a v2 that breaks caught tasks is worse, not better)."
+  ],
   "scope": "eval",
   "check": "cd eval && bun test && bunx tsc --noEmit"
 }
