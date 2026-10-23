@@ -21,6 +21,11 @@ on:
         type: choice
         options: [v1, v2]
         default: v1
+      mutants:
+        description: also grade caught tasks on mutants (the gold patch minus one hunk at a time)
+        type: choice
+        options: ["false", "true"]
+        default: "false"
       writer_runs:
         description: grade only, using writer output from these run ids (space-separated)
         default: ""
@@ -127,9 +132,12 @@ jobs:
         working-directory: eval
         env:
           STEP0_ID: ${{ matrix.id }}
+          STEP0_MUTANTS: ${{ inputs.mutants }}
         run: |
           if [ ! -f "results/$STEP0_ID/write.json" ]; then echo "no writer output"; exit 1; fi
-          bun src/grade.ts --tasks tasks/tasks.json.gz --id "$STEP0_ID" --results results
+          flags=()
+          if [ "$STEP0_MUTANTS" = "true" ]; then flags+=(--mutants); fi
+          bun src/grade.ts --tasks tasks/tasks.json.gz --id "$STEP0_ID" --results results "${flags[@]}"
       - name: Upload graded run
         if: always()
         uses: actions/upload-artifact@v4
