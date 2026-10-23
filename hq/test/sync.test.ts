@@ -230,3 +230,47 @@ test("a cherry-pick, revert or rebase under way in the worktree is refused and l
   }
   expect(hq(repo, "sync", "g").code).toBe(0);
 });
+
+test("main modifying a file the goal deleted and now ignores locally is refused and the local file survives", () => {
+  git(["rm", "-q", "app.txt"], wt);
+  writeFileSync(join(wt, ".gitignore"), "app.txt\n");
+  git(["add", ".gitignore"], wt);
+  git(["commit", "-q", "-m", "goal drops app.txt and ignores it"], wt);
+  writeFileSync(join(wt, "app.txt"), "local only\n");
+  commit(repo, "app.txt", "v2 from main\n", "main edits app");
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("app.txt");
+  expect(r.out).toBe("");
+  expect(readFileSync(join(wt, "app.txt"), "utf8")).toBe("local only\n");
+  expect(state()).toBe(before);
+});
+
+test("main renaming onto a path the worktree ignores is refused and the local file survives", () => {
+  commit(wt, ".gitignore", "renamed.txt\n", "ignore renamed");
+  writeFileSync(join(wt, "renamed.txt"), "local only\n");
+  git(["mv", "other.txt", "renamed.txt"], repo);
+  git(["commit", "-q", "-m", "main renames other"], repo);
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("renamed.txt");
+  expect(readFileSync(join(wt, "renamed.txt"), "utf8")).toBe("local only\n");
+  expect(state()).toBe(before);
+});
+
+test("main modifying a file the goal deleted and the worktree has untracked (status hides it) is refused too", () => {
+  git(["rm", "-q", "app.txt"], wt);
+  git(["commit", "-q", "-m", "goal drops app.txt"], wt);
+  git(["config", "status.showUntrackedFiles", "no"], wt);
+  writeFileSync(join(wt, "app.txt"), "local only\n");
+  expect(git(["status", "--porcelain"], wt)).toBe("");
+  commit(repo, "app.txt", "v2 from main\n", "main edits app");
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("app.txt");
+  expect(readFileSync(join(wt, "app.txt"), "utf8")).toBe("local only\n");
+  expect(state()).toBe(before);
+});

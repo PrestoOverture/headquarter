@@ -2,23 +2,36 @@
 // worktree. Never a rebase: the commits an approval and a report name stay in the history.
 // $HQ_HOME is not touched; the old approval and report simply stop matching the new head.
 
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { goalBranch, MAIN, validGoal } from "./approval";
 import { git, revParse, run, worktreeOf } from "./git";
 
-/** Paths main adds that land on something the worktree already has untracked. With a clean status that is an ignored file, and git's merge overwrites those silently (--no-overwrite-ignore does nothing in ort). */
-function ignoredInTheWay(wt: string, base: string, main: string): string[] {
-  const added = git(["diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", base, main], wt).split("\0").filter(Boolean);
-  const tracked = (p: string) => git(["ls-files", "-z", "--", p], wt) !== "";
-  const clash = (p: string) => {
-    for (let d = p; d !== "." && d !== "/"; d = dirname(d)) {
-      if (!existsSync(resolve(wt, d))) continue;
-      if (d === p || !lstatSync(resolve(wt, d)).isDirectory()) return !tracked(d);
-    }
-    return false;
+/** NUL-separated path list from a git command that must succeed (git() would trim a leading space off the first path). */
+function paths(args: string[], wt: string): string[] {
+  const r = run(["git", ...args], wt);
+  if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${(r.err || r.out).trim()}`);
+  return r.out.split("\0").filter(Boolean);
+}
+
+/** Paths main changes that are, or sit under or over, a file the worktree has untracked or ignored. A clean status hides those; the merge overwrites them (--no-overwrite-ignore does nothing in ort) or, on a conflict, loses them in the abort. */
+function untrackedInTheWay(wt: string, base: string, main: string): string[] {
+  // --no-renames lists a rename as its deleted source and its added target, so every touched path appears.
+  const changed = new Set(paths(["diff", "--name-only", "--no-renames", "-z", base, main], wt));
+  const local = new Set([
+    ...paths(["ls-files", "--others", "-z"], wt),
+    ...paths(["ls-files", "--others", "--exclude-standard", "-z"], wt),
+    ...paths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], wt),
+  ]);
+  const parents = (p: string) => {
+    const out: string[] = [];
+    for (let d = dirname(p); d !== "."; d = dirname(d)) out.push(d);
+    return out;
   };
-  return added.filter(clash);
+  const clash = new Set<string>();
+  for (const c of changed) if (local.has(c) || parents(c).some((d) => local.has(d))) clash.add(c);
+  for (const l of local) if (parents(l).some((d) => changed.has(d))) clash.add(l);
+  return [...clash].sort();
 }
 
 export type SyncResult =
@@ -43,8 +56,8 @@ export function sync(cwd: string, goal: string): SyncResult {
   }
   if (run(["git", "merge-base", "--is-ancestor", main, before], cwd).code === 0) return { ok: true, upToDate: true, head: before };
 
-  const clash = ignoredInTheWay(wt, git(["merge-base", main, before], cwd), main);
-  if (clash.length) throw new Error(`${MAIN} adds files where the worktree has ignored ones, which the merge would overwrite: ${clash.join(", ")}; move them away first`);
+  const clash = untrackedInTheWay(wt, git(["merge-base", main, before], cwd), main);
+  if (clash.length) throw new Error(`${MAIN} changes paths where the worktree has untracked or ignored files, which the merge would overwrite or lose: ${clash.join(", ")}; move them away first`);
 
   const m = run(["git", "merge", "--no-ff", "--no-edit","-m", `Merge ${MAIN} into ${branch}`, main], wt);
   if (m.code === 0) return { ok: true, upToDate: false, before, head: git(["rev-parse", "HEAD"], wt), main };
