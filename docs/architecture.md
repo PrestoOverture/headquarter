@@ -17,7 +17,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/clues.ts        报告风险栏的线索：goal 新增行里 main 没 import 过的模块、新的进程或网络调用，源码和测试文件分开；正则，只是线索
   src/ledger.ts       记账（M0.3）：~/.hq/ledger/<仓库>/events.jsonl，只追加
   src/lines.ts        任务大小（200 行规则）：基线到结束 commit 的增删行数，只算文本文件，不算 goals/*.json 和锁文件
-  src/cost.ts         任务成本（`hq task cost --from`）：从 Claude Code 的 stream-json 日志或 json 结果里读 result 行的 total_cost_usd，按 session_id 数会话（同一会话的多条 result 取最后一条），多个会话求和；已记过的会话跳过，没有新会话就拒；事件里记会话 id、文件路径和哈希
+  src/cost.ts         任务成本（`hq task cost --from`）：从 Claude Code 的 stream-json 日志或 json 结果里读 result 行的 total_cost_usd，每条 result 是一次运行（含 --resume），按 result 的 uuid 去重并求和；已记过的 uuid 跳过，没有新的就拒，没有 uuid 也拒；事件里记 uuid、会话 id（仅供参考）、文件路径和哈希
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
   src/escape.ts       逃逸候选：近 14 天合入的目标，被之后某个目标的修复提交再次改到（`hq escapes`，合入后也打印）；只建议，不记账
   src/review.ts       Codex 审查作为关卡（`hq review`）：对任务基线跑 `codex review`，解析 P0–P3，P0/P1 不过；全文存 ~/.hq/reviews/<仓库>/
