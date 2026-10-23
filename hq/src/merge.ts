@@ -3,15 +3,18 @@
 // the full tests run on exactly that commit, inside the executor sandbox (D35). main
 // then moves to that commit only if it has not moved meanwhile. One --no-ff merge commit
 // per goal, so one `git revert -m 1` takes the whole goal back out.
+// Merges into one repository go one at a time under a lock. A merge whose main moved while
+// its tests ran redoes the trial once on the new main, and refuses only if main moves again.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { consumeApproval, goalBranch, MAIN, readApproval } from "./approval";
+import { consumeApproval, goalBranch, hqHome, MAIN, readApproval, repoId } from "./approval";
 import { type Candidate, escapeCandidates } from "./escape";
 import { commonDir, git, revParse, run, worktreeOf } from "./git";
 import { append, readEvents } from "./ledger";
 import { recordLines } from "./lines";
+import { holder, tryLock } from "./lockfile";
 import { sandboxed } from "./sandbox";
 import { rows } from "./stats";
 import { reinstallIfChanged } from "./versions";
@@ -38,7 +41,7 @@ export type Trial =
  * Builds the merge of `head` into the latest main in a scratch worktree and runs the full
  * tests on it in the sandbox. `then` sees the result while the scratch commit still exists.
  */
-export function trialMerge<T>(cwd: string, goal: string, head: string, then: (t: Trial) => T): T {
+export function trialMerge<T>(cwd: string, goal: string, head: string, then: (t: Trial) => T, runTests: typeof sandboxed = sandboxed): T {
   const base = revParse(MAIN, cwd);
   if (!base) return then({ ok: false, reason: `no branch ${MAIN}` });
   const config = readConfig(cwd);
@@ -48,7 +51,7 @@ export function trialMerge<T>(cwd: string, goal: string, head: string, then: (t:
     const m = run(["git", "merge", "--no-ff", "--no-edit", "-m", `Merge goal ${goal}\n\nApproved commit: ${head}`, head], scratch);
     if (m.code !== 0) return then({ ok: false, reason: `goal ${goal} does not merge cleanly into ${MAIN}:\n${(m.out + m.err).trim()}` });
     const merged = git(["rev-parse", "HEAD"], scratch);
-    const t = sandboxed(config.test, scratch, { writable: [scratch], commonDir: commonDir(cwd) });
+    const t = runTests(config.test, scratch, { writable: [scratch], commonDir: commonDir(cwd) });
     return then({ ok: true, base, merged, testCode: t.code, testOutput: t.out + t.err, testOut: t.out, testErr: t.err });
   } finally {
     run(["git", "worktree", "remove", "--force", scratch], cwd);
@@ -56,7 +59,30 @@ export function trialMerge<T>(cwd: string, goal: string, head: string, then: (t:
   }
 }
 
-export function merge(cwd: string, goal: string): MergeResult {
+export type MergeOptions = {
+  /** Seconds to wait for another merge's lock; 0 refuses at once. */
+  wait?: number;
+  runTests?: typeof sandboxed;
+};
+
+export const mergeLockPath = (cwd: string) => join(hqHome(), "merge", `${repoId(cwd)}.lock`);
+
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** The merge lock of this repository, waiting up to `wait` seconds for its holder; null if it is still held. */
+function acquire(cwd: string, wait: number): (() => void) | null {
+  const path = mergeLockPath(cwd);
+  const deadline = Date.now() + wait * 1000;
+  for (;;) {
+    const release = tryLock(path);
+    if (release) return release;
+    if (Date.now() >= deadline) return null;
+    sleepSync(Math.min(100, Math.max(1, deadline - Date.now())));
+  }
+}
+
+/** The goal branch's head, if it is the commit that was approved. */
+function approvedHead(cwd: string, goal: string): { ok: true; head: string } | { ok: false; reason: string } {
   const approval = readApproval(cwd, goal);
   if (!approval) return { ok: false, reason: `goal ${goal} is not approved: run \`hq approve ${goal}\`` };
   const head = revParse(goalBranch(goal), cwd);
@@ -66,11 +92,37 @@ export function merge(cwd: string, goal: string): MergeResult {
       ok: false,
       reason: `${goalBranch(goal)} is at ${head.slice(0, 12)} but the approval is for ${approval.commit.slice(0, 12)}: new commits void an approval; approve again`,
     };
-  return trialMerge(cwd, goal, head, (t): MergeResult => {
+  return { ok: true, head };
+}
+
+export function merge(cwd: string, goal: string, opts: MergeOptions = {}): MergeResult {
+  const early = approvedHead(cwd, goal);
+  if (!early.ok) return early;
+  const release = acquire(cwd, opts.wait ?? 0);
+  if (!release) {
+    const pid = holder(mergeLockPath(cwd));
+    return { ok: false, reason: `another hq merge is running on this repository${pid ? ` (pid ${pid})` : ""}; use --wait <seconds> to queue behind it` };
+  }
+  try {
+    // The wait may have been long: the approval is checked again on what is there now.
+    const now = approvedHead(cwd, goal);
+    if (!now.ok) return now;
+    let r = attempt(cwd, goal, now.head, opts.runTests);
+    if (r.ok === "moved") r = attempt(cwd, goal, now.head, opts.runTests);
+    if (r.ok === "moved") return { ok: false, reason: `${MAIN} moved again while the tests ran; run hq merge again`, testOutput: r.testOutput };
+    return r;
+  } finally {
+    release();
+  }
+}
+
+/** One trial merge on the current main and, if its tests pass and main has not moved, the merge itself. */
+function attempt(cwd: string, goal: string, head: string, runTests?: typeof sandboxed): MergeResult | { ok: "moved"; testOutput: string } {
+  return trialMerge(cwd, goal, head, (t): MergeResult | { ok: "moved"; testOutput: string } => {
     if (!t.ok) return t;
     const { base, merged, testOutput } = t;
     if (t.testCode !== 0) return { ok: false, reason: `tests failed on the merge with the latest ${MAIN} (exit ${t.testCode})`, testOutput };
-    if (revParse(MAIN, cwd) !== base) return { ok: false, reason: `${MAIN} moved while the tests ran; run hq merge again`, testOutput };
+    if (revParse(MAIN, cwd) !== base) return { ok: "moved", testOutput };
     // Through git, so the main-ref guard sees the update; the checked-out main follows.
     const wt = worktreeOf(MAIN, cwd);
     if (wt) git(["merge", "--ff-only", "-q", merged], wt);
@@ -110,5 +162,5 @@ export function merge(cwd: string, goal: string): MergeResult {
       escapesError = (e as Error).message;
     }
     return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput, reinstalled, reinstallError, linesErrors, escapes, escapesError };
-  });
+  }, runTests);
 }

@@ -6,7 +6,8 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoId } from "../src/approval";
-import { envPath, lock, LOCK_STALE_MS, lockPath } from "../src/env";
+import { envPath, lock, lockPath } from "../src/env";
+import { LOCK_STALE_MS } from "../src/lockfile";
 import { git, run } from "../src/git";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");

@@ -7,7 +7,7 @@
 //   hq status [--json]    every goal: head, ahead/behind main, report and approval state, open tasks
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
-//   hq merge <goal>       merge an approved goal into main after the full tests pass
+//   hq merge <goal> [--wait <seconds>]   merge an approved goal into main after the full tests pass; one merge per repository at a time, --wait queues behind a running one
 //   hq review <goal> --task <task> [--claimed-done] [--no-record]   Codex review of the task, recorded as the codex_review gate
 //   hq install [<rev>]    install hq/ from main (or <rev>) as the version that runs (M0.4)
 //   hq rollback           go back to the previously installed version
@@ -250,7 +250,10 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (cmd === "merge" && goal) {
-      const r = merge(cwd, goal);
+      const { values: o } = parseArgs({ args: argv.slice(2), options: { wait: { type: "string" } } });
+      const wait = o.wait === undefined ? 0 : Number(o.wait);
+      if (!(wait >= 0)) throw new Error("--wait must be a number of seconds");
+      const r = merge(cwd, goal, { wait });
       if (r.testOutput) console.log(r.testOutput.trimEnd());
       if (!r.ok) {
         console.error(`not merged: ${r.reason}`);
@@ -307,7 +310,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq env <task> [--release] | hq status [--json] | hq report|approve|merge <goal> | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq env <task> [--release] | hq status [--json] | hq report|approve <goal> | hq merge <goal> [--wait <seconds>] | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 

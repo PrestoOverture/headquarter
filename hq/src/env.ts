@@ -3,16 +3,16 @@
 // $HQ_HOME/env/allocations.json, keyed by repository id and task; every change is made under one lock
 // file created with O_EXCL, so concurrent runs never read the same free block.
 
-import { closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hqHome, repoId } from "./approval";
+import { tryLock } from "./lockfile";
 
 export const PORT_MIN = 20000;
 export const PORT_MAX = 29999;
 export const BLOCK = 10;
-export const LOCK_STALE_MS = 60_000;
 
 export type Env = { port_base: number; tmpdir: string; db_name: string };
 // A Map, so a task named `constructor` is an ordinary key.
@@ -27,79 +27,12 @@ export const lockPath = () => join(hqHome(), "env", "allocations.lock");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The holder's pid is the first line of a lock file; undefined if the file does not (yet) have one. */
-function holderPid(content: string): number | undefined {
-  const m = /^(\d+)\n/.exec(content);
-  return m ? Number(m[1]) : undefined;
-}
-
-function running(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code !== "ESRCH"; // EPERM: it exists, it is someone else's
-  }
-}
-
-/** A lock is stale if its holder is gone; one without a readable pid (its writer may be mid-write) only after LOCK_STALE_MS. */
-function stale(path: string, content: string): boolean {
-  const pid = holderPid(content);
-  if (pid !== undefined) return !running(pid);
-  return Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS;
-}
-
 /** Takes the lock, or takes it over once its holder is gone; returns the release. */
 export async function lock(path: string): Promise<() => void> {
-  const token = `${process.pid}\n${Math.random()}\n`;
-  mkdirSync(join(path, ".."), { recursive: true });
-  const release = () => {
-    // The lock may have been taken over as stale and be someone else's meanwhile.
-    try {
-      if (readFileSync(path, "utf8") === token) unlinkSync(path);
-    } catch {}
-  };
   for (;;) {
-    try {
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
-      writeFileSync(fd, token);
-      closeSync(fd);
-      return release;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    }
-    if (takeOver(path, token)) return release;
+    const release = tryLock(path);
+    if (release) return release;
     await sleep(10 + Math.random() * 20);
-  }
-}
-
-/**
- * Replaces a stale lock with ours by renaming our file over it. Waiters do this one at a time under
- * a second lock file and re-read the lock under it, so a lock another waiter has just taken is never replaced.
- */
-function takeOver(path: string, token: string): boolean {
-  const guard = `${path}.takeover`;
-  const mine = `${path}.${process.pid}.${Math.random()}`;
-  try {
-    if (!stale(path, readFileSync(path, "utf8"))) return false;
-    try {
-      closeSync(openSync(guard, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL));
-    } catch (e) {
-      // A waiter that died holding the guard must not block everyone for good.
-      if ((e as NodeJS.ErrnoException).code === "EEXIST" && Date.now() - statSync(guard).mtimeMs > LOCK_STALE_MS) unlinkSync(guard);
-      return false;
-    }
-    try {
-      if (!stale(path, readFileSync(path, "utf8"))) return false;
-      writeFileSync(mine, token);
-      renameSync(mine, path);
-      return true;
-    } finally {
-      rmSync(mine, { force: true });
-      unlinkSync(guard);
-    }
-  } catch {
-    return false;
   }
 }
 

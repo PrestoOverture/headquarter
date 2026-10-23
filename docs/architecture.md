@@ -10,7 +10,8 @@
 .hq.json              合入前跑的全量测试命令；hq 从 main 读，目标分支改不了它
 hq/                   合入锁（M0.1）：hq approve / merge / install-hook，git 的 main 守卫钩子
   src/approval.ts     批准记录：~/.hq/approvals/<仓库>/，绑定一个 commit，合入后作废
-  src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
+  src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main；同一仓库的合入排队（$HQ_HOME/merge/<仓库>.lock，`--wait <秒>` 等前一个，默认 0 立即拒绝并报持有者 pid）；测试期间 main 动了就在新 main 上重做一次预演，再动才拒
+  src/lockfile.ts     锁文件：O_EXCL 创建、第一行写持有者 pid、持有者已不在才接管；`hq env` 和 `hq merge` 共用
   src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
   src/replay.ts       重放任务（`hq replay <任务>`）：从任务记录的基线开新目标分支和 worktree，目标文件带原目标标题、该任务的验收标准和 replay_of；只读账本，打印原任务的大小和各关卡结果
   src/env.ts          任务环境（`hq env <任务>`）：每个任务一块 10 个连续端口（20000–29999，分配时在 127.0.0.1 上试绑，占着的块跳过）、$TMPDIR/hq-env/<仓库id>/<任务>、数据库名 hq_<仓库哈希8位>_<任务>；端口等整机共享，所有仓库的分配记在同一个 $HQ_HOME/env/allocations.json（按 仓库id+任务 索引），改动都在 O_EXCL 锁文件 allocations.lock 下做（锁里写持有者 pid，持有者已不在才接管；没有 pid 的锁超过 60 秒才算过期）；`--release` 释放
