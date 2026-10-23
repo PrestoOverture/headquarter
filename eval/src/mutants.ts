@@ -7,7 +7,7 @@ import type { Side } from "./judge";
 
 export const MAX_MUTANTS = 8;
 
-export type MutantResult = "killed" | "survived" | "flaky" | "apply_failed";
+export type MutantResult = "killed" | "survived" | "flaky" | "apply_failed" | "build_failed" | "not_graded";
 
 export type Mutant = {
   file: string; // the b/ path of the file the left-out hunk belongs to
@@ -120,12 +120,45 @@ export function buildMutants(patch: string, max = MAX_MUTANTS): { mutants: Mutan
 
 /**
  * killed: fails every run; survived: passes every run; flaky: the runs disagree.
- * Neither a patch that does not apply nor a rebuild that timed out says anything about
- * the tests, so both are apply_failed and stay out of the score.
+ * None of the rest says anything about the tests, so they stay out of the score:
+ * apply_failed (the patches do not apply), not_graded (rebuild timed out, no runs, or
+ * grading threw), build_failed (the rebuild exit codes differ from the fixed side's).
+ * build_failed is a lower bound: a hunk that breaks the build makes the script fail
+ * whatever the tests check, and a compile error inside the writer's script rather than
+ * in the rebuild still counts as killed (C/C++ may even rerun a stale binary).
  */
-export function mutantResult(side: Side): MutantResult {
-  if (!side.applied || side.rebuild_timed_out || !side.runs.length) return "apply_failed";
+export function mutantResult(side: Side & { rebuild: number[] }, fixedRebuild: number[]): MutantResult {
+  if (!side.applied) return "apply_failed";
+  if (side.rebuild_timed_out || !side.runs.length) return "not_graded";
+  if (side.rebuild.length !== fixedRebuild.length || side.rebuild.some((c, i) => c !== fixedRebuild[i])) return "build_failed";
   const passes = side.runs.filter((c) => c === 0).length;
   if (passes === side.runs.length) return "survived";
   return passes === 0 ? "killed" : "flaky";
+}
+
+/**
+ * Grades the mutants of `patch` one by one with `grade`. `save` gets the records after
+ * each step, starting with every mutant pending (not_graded), so a timeout or crash
+ * keeps what is known; a mutant whose grading throws stays not_graded and the rest go on.
+ */
+export function gradeMutants(
+  patch: string,
+  fixedRebuild: number[],
+  grade: (m: Mutant, i: number) => Side & { rebuild: number[] },
+  save: (r: { mutants: MutantRecord[]; mutants_left_out: number }) => void,
+): { mutants: MutantRecord[]; mutants_left_out: number } {
+  const built = buildMutants(patch);
+  const mutants: MutantRecord[] = built.mutants.map((m) => ({ file: m.file, hunk: m.hunk, result: "not_graded", rebuild: [], runs: [] }));
+  const out = { mutants, mutants_left_out: built.left_out };
+  save(out);
+  built.mutants.forEach((m, i) => {
+    try {
+      const g = grade(m, i);
+      mutants[i] = { ...mutants[i]!, result: mutantResult(g, fixedRebuild), rebuild: g.rebuild, runs: g.runs };
+    } catch (e) {
+      console.error(`mutant ${i + 1} (${m.file} ${m.hunk}) not graded: ${e instanceof Error ? e.message : e}`);
+    }
+    save(out);
+  });
+  return out;
 }

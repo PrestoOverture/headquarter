@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildMutants, MAX_MUTANTS, mutantResult, splitHunks } from "../src/mutants";
+import { buildMutants, gradeMutants, MAX_MUTANTS, type MutantRecord, mutantResult, splitHunks } from "../src/mutants";
 import { run } from "../src/sh";
 import { markdown, mutationScore, summarize, type Report } from "../src/summarize";
 import { keptTasks } from "../src/tasks";
@@ -213,37 +213,116 @@ test("every real gold patch splits into as many hunks as it has @@ lines", () =>
 });
 
 describe("mutantResult", () => {
-  const side = (...runs: number[]) => ({ applied: true, runs });
+  const side = (...runs: number[]) => ({ applied: true, runs, rebuild: [0] });
   test("fails every run: killed; a timeout counts as failing", () => {
-    expect(mutantResult(side(1, 1))).toBe("killed");
-    expect(mutantResult(side(-1, 2))).toBe("killed");
+    expect(mutantResult(side(1, 1), [0])).toBe("killed");
+    expect(mutantResult(side(-1, 2), [0])).toBe("killed");
   });
   test("passes every run: survived", () => {
-    expect(mutantResult(side(0, 0))).toBe("survived");
+    expect(mutantResult(side(0, 0), [0])).toBe("survived");
   });
   test("runs that disagree: flaky", () => {
-    expect(mutantResult(side(0, 1))).toBe("flaky");
-    expect(mutantResult(side(1, 0))).toBe("flaky");
+    expect(mutantResult(side(0, 1), [0])).toBe("flaky");
+    expect(mutantResult(side(1, 0), [0])).toBe("flaky");
   });
-  test("a patch that does not apply, or a rebuild that timed out: apply_failed", () => {
-    expect(mutantResult({ applied: false, runs: [] })).toBe("apply_failed");
-    expect(mutantResult({ applied: true, runs: [127, 127], rebuild_timed_out: true })).toBe("apply_failed");
+  test("a patch that does not apply: apply_failed", () => {
+    expect(mutantResult({ applied: false, runs: [], rebuild: [] }, [0])).toBe("apply_failed");
+  });
+  test("a rebuild that timed out, or no runs: not_graded", () => {
+    expect(mutantResult({ applied: true, runs: [127, 127], rebuild: [-1], rebuild_timed_out: true }, [0])).toBe("not_graded");
+    expect(mutantResult({ applied: true, runs: [], rebuild: [0] }, [0])).toBe("not_graded");
+  });
+  test("rebuild exit codes that differ from the fixed side's: build_failed, even when every run fails", () => {
+    expect(mutantResult({ applied: true, runs: [1, 1], rebuild: [0, 2] }, [0, 0])).toBe("build_failed");
+    expect(mutantResult({ applied: true, runs: [0, 0], rebuild: [1] }, [0])).toBe("build_failed");
+    expect(mutantResult({ applied: true, runs: [1, 1], rebuild: [0] }, [0, 0])).toBe("build_failed");
+  });
+  test("a rebuild that fails the same way on the fixed side is not a build failure", () => {
+    expect(mutantResult({ applied: true, runs: [1, 1], rebuild: [2, 0] }, [2, 0])).toBe("killed");
   });
 });
 
+describe("gradeMutants", () => {
+  const r = repo({ "a.txt": text(A), "b.txt": text(B) }, { "a.txt": text(change(A, { 3: ["x"] })), "b.txt": text(change(B, { 3: ["y"] })) });
+  const ok = (...runs: number[]) => ({ applied: true, runs, rebuild: [0] });
+
+  test("report is saved with every mutant pending before the first is graded, then after each", () => {
+    const saved: string[][] = [];
+    const out = gradeMutants(
+      r.gold,
+      [0],
+      (_m, i) => {
+        expect(saved.at(-1)).toEqual(i === 0 ? ["not_graded", "not_graded"] : ["killed", "not_graded"]);
+        return ok(i === 0 ? 1 : 0, i === 0 ? 1 : 0);
+      },
+      (x) => saved.push(x.mutants.map((m) => m.result)),
+    );
+    expect(saved).toEqual([["not_graded", "not_graded"], ["killed", "not_graded"], ["killed", "survived"]]);
+    expect(out.mutants.map((m) => [m.file, m.result, m.runs, m.rebuild])).toEqual([
+      ["a.txt", "killed", [1, 1], [0]],
+      ["b.txt", "survived", [0, 0], [0]],
+    ]);
+  });
+
+  test("a mutant whose grading throws is not_graded and the rest go on", () => {
+    const errors = console.error;
+    console.error = () => {};
+    try {
+      const saved: string[][] = [];
+      const out = gradeMutants(
+        r.gold,
+        [0],
+        (_m, i) => {
+          if (i === 0) throw new Error("docker exploded");
+          return ok(1, 1);
+        },
+        (x) => saved.push(x.mutants.map((m) => m.result)),
+      );
+      expect(out.mutants.map((m) => m.result)).toEqual(["not_graded", "killed"]);
+      expect(saved.at(-1)).toEqual(["not_graded", "killed"]);
+    } finally {
+      console.error = errors;
+    }
+  });
+
+  test("a build failure on the mutant is recorded, with its rebuild codes", () => {
+    const out = gradeMutants(r.gold, [0], () => ({ applied: true, runs: [1, 1], rebuild: [2] }), () => {});
+    expect(out.mutants.map((m) => [m.result, m.rebuild])).toEqual([["build_failed", [2]], ["build_failed", [2]]]);
+  });
+
+  test("a single-hunk patch saves an empty mutants list and grades nothing", () => {
+    const one = repo({ "a.txt": text(A) }, { "a.txt": text(change(A, { 3: ["x"] })) });
+    const saved: unknown[] = [];
+    const out = gradeMutants(one.gold, [0], () => {
+      throw new Error("unreachable");
+    }, (x) => saved.push(x));
+    expect(out).toEqual({ mutants: [], mutants_left_out: 0 });
+    expect(saved).toEqual([out]);
+  });
+});
+
+test("grade.ts writes report.json with the normal verdict before any mutant is graded", () => {
+  const src = readFileSync(new URL("../src/grade.ts", import.meta.url), "utf8");
+  const main = src.slice(src.indexOf("function main"));
+  expect(main.indexOf("save();")).toBeGreaterThan(-1);
+  expect(main.indexOf("save();")).toBeLessThan(main.indexOf("gradeMutants("));
+  expect(main).toContain("verdict: final");
+});
+
 describe("mutation score", () => {
-  const mutant = (result: "killed" | "survived" | "flaky" | "apply_failed") => ({ file: "f", hunk: "@@ -1 +1 @@", result, rebuild: [0], runs: [1, 1] });
-  const report = (id: string, mutants?: ReturnType<typeof mutant>[], verdict: Report["verdict"] = "caught"): Report => ({
+  const mutant = (result: MutantRecord["result"]) => ({ file: "f", hunk: "@@ -1 +1 @@", result, rebuild: [0], runs: [1, 1] });
+  const report = (id: string, mutants?: ReturnType<typeof mutant>[], verdict: Report["verdict"] = "caught", mutants_left_out?: number): Report => ({
     instance_id: id,
     language: "c",
     verdict,
     mutants,
+    mutants_left_out,
   });
 
   test("killed over killed plus survived, with the denominator and the other counts", () => {
     const s = mutationScore([
-      report("a", [mutant("killed"), mutant("killed"), mutant("survived")]),
-      report("b", [mutant("killed"), mutant("flaky"), mutant("apply_failed"), mutant("apply_failed")]),
+      report("a", [mutant("killed"), mutant("killed"), mutant("survived")], "caught", 4),
+      report("b", [mutant("killed"), mutant("flaky"), mutant("apply_failed"), mutant("apply_failed"), mutant("build_failed"), mutant("not_graded"), mutant("build_failed")], "caught", 1),
       report("c", []),
     ]);
     expect(s).toEqual({
@@ -253,9 +332,17 @@ describe("mutation score", () => {
       survived: 1,
       flaky: 1,
       apply_failed: 2,
+      build_failed: 2,
+      not_graded: 1,
+      mutants_left_out: 5,
       tasks: 3,
       tasks_without_mutants: ["c"],
     });
+  });
+  test("build_failed and not_graded stay out of the denominator", () => {
+    const s = mutationScore([report("a", [mutant("killed"), mutant("build_failed"), mutant("build_failed"), mutant("not_graded")])])!;
+    expect([s.score, s.denominator]).toEqual([1, 1]);
+    expect(mutationScore([report("a", [mutant("build_failed"), mutant("not_graded")])])!.score).toBeNull();
   });
   test("tasks without mutation data never count as killed", () => {
     const withData = [report("a", [mutant("survived"), mutant("killed")])];
@@ -280,7 +367,7 @@ describe("mutation score", () => {
     expect(s.caught).toBe(2);
     const md = markdown(s);
     expect(md).toContain("Mutation score 33.3% (killed 1/3");
-    expect(md).toContain("flaky 1, apply_failed 0");
+    expect(md).toContain("flaky 1, apply_failed 0, build_failed 0, not_graded 0; mutants_left_out (cap) 0");
     expect(md).toContain("no mutants (single hunk): b");
   });
 });

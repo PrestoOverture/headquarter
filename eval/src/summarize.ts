@@ -20,20 +20,21 @@ export type Report = {
 };
 
 /**
- * killed ÷ (killed + survived) over every graded mutant. Flaky and apply_failed mutants
- * are counted but stay out of the denominator; a report without a mutants list adds
+ * killed ÷ (killed + survived) over every graded mutant. Flaky, apply_failed, build_failed
+ * and not_graded mutants are counted but stay out of the denominator; a report without a mutants list adds
  * nothing, so it never counts as killed. null when no report has mutation data.
  */
 export function mutationScore(reports: Report[]) {
   const graded = reports.filter((r) => r.mutants);
   if (!graded.length) return null;
-  const counts: Record<MutantResult, number> = { killed: 0, survived: 0, flaky: 0, apply_failed: 0 };
+  const counts: Record<MutantResult, number> = { killed: 0, survived: 0, flaky: 0, apply_failed: 0, build_failed: 0, not_graded: 0 };
   for (const r of graded) for (const m of r.mutants!) counts[m.result]++;
   const denominator = counts.killed + counts.survived;
   return {
     score: denominator ? counts.killed / denominator : null,
     denominator,
     ...counts,
+    mutants_left_out: graded.reduce((n, r) => n + (r.mutants_left_out ?? 0), 0),
     tasks: graded.length,
     tasks_without_mutants: graded.filter((r) => !r.mutants!.length).map((r) => r.instance_id),
   };
@@ -81,7 +82,7 @@ export function markdown(s: ReturnType<typeof summarize>): string {
     const score = mu.score === null ? "n/a" : `${(mu.score * 100).toFixed(1)}%`;
     lines.push(
       `\n### Mutation score ${score} (killed ${mu.killed}/${mu.denominator} = killed + survived)\n`,
-      `${mu.tasks} tasks graded; flaky ${mu.flaky}, apply_failed ${mu.apply_failed}; no mutants (single hunk): ${mu.tasks_without_mutants.join(", ") || "none"}`,
+      `${mu.tasks} tasks graded; flaky ${mu.flaky}, apply_failed ${mu.apply_failed}, build_failed ${mu.build_failed}, not_graded ${mu.not_graded}; mutants_left_out (cap) ${mu.mutants_left_out}; no mutants (single hunk): ${mu.tasks_without_mutants.join(", ") || "none"}`,
     );
   }
   if (s.missing.length) lines.push(`\nNo report (job failed): ${s.missing.join(", ")}`);

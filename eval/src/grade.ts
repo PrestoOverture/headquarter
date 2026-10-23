@@ -9,13 +9,14 @@
 // and buggy.log / fixed.log.
 //
 // With --mutants, a caught task also gets its gold patch graded minus one hunk at a time
-// (mutants.ts): the same run on each mutant, logged to mutant-<n>.log.
+// (mutants.ts): the same run on each mutant, logged to mutant-<n>.log. report.json is
+// written with the verdict first and rewritten after each mutant.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { SCRIPT, type Side, verdict } from "./judge";
-import { buildMutants, type MutantRecord, mutantResult } from "./mutants";
+import { gradeMutants } from "./mutants";
 import { run, sh, tail } from "./sh";
 import { findTask, readTasks, type Task } from "./tasks";
 
@@ -89,16 +90,6 @@ function gradeSide(task: Task, writerPatch: string, fixed: boolean, logPath: str
   return gradeRun(task, ctr, fixed ? [["gold", task.patch], ["writer", writerPatch]] : [["writer", writerPatch]], logPath);
 }
 
-function gradeMutants(task: Task, writerPatch: string, runDir: string): { mutants: MutantRecord[]; mutants_left_out: number } {
-  const built = buildMutants(task.patch);
-  const mutants = built.mutants.map((m, i) => {
-    const ctr = `step0-mutant-${i + 1}-${task.instance_id}`.toLowerCase();
-    const g = gradeRun(task, ctr, [["mutant", m.patch], ["writer", writerPatch]], join(runDir, `mutant-${i + 1}.log`));
-    return { file: m.file, hunk: m.hunk, result: mutantResult(g), rebuild: g.rebuild, runs: g.runs };
-  });
-  return { mutants, mutants_left_out: built.left_out };
-}
-
 function main() {
   const { values } = parseArgs({
     options: { tasks: { type: "string" }, id: { type: "string" }, results: { type: "string" }, mutants: { type: "boolean", default: false } },
@@ -119,7 +110,6 @@ function main() {
     fixed = gradeSide(task, writerPatch, true, join(runDir, "fixed.log"));
   }
   const final = verdict(writerPatch, task.patch, buggy, fixed);
-  const mutation = values.mutants && final === "caught" ? gradeMutants(task, writerPatch, runDir) : null;
   const report = {
     instance_id: task.instance_id,
     language: task.language,
@@ -127,10 +117,18 @@ function main() {
     graded_at: new Date().toISOString(),
     buggy,
     fixed,
-    ...mutation,
   };
-  writeFileSync(join(runDir, "report.json"), JSON.stringify(report, null, 2) + "\n");
-  console.log(`${task.instance_id}: ${report.verdict} (buggy ${buggy?.runs ?? "-"}, fixed ${fixed?.runs ?? "-"})${mutation ? `, mutants: ${mutation.mutants.map((m) => m.result).join(" ") || "none"}` : ""}`);
+  // The verdict is on disk before any mutant runs; each mutant rewrites the report.
+  const save = (mutation?: object) => writeFileSync(join(runDir, "report.json"), JSON.stringify({ ...report, ...mutation }, null, 2) + "\n");
+  save();
+  const mutation =
+    values.mutants && final === "caught"
+      ? gradeMutants(task.patch, fixed!.rebuild, (m, i) => {
+          const ctr = `step0-mutant-${i + 1}-${task.instance_id}`.toLowerCase();
+          return gradeRun(task, ctr, [["mutant", m.patch], ["writer", writerPatch]], join(runDir, `mutant-${i + 1}.log`));
+        }, save)
+      : null;
+  console.log(`${task.instance_id}: ${final} (buggy ${buggy?.runs ?? "-"}, fixed ${fixed?.runs ?? "-"})${mutation ? `, mutants: ${mutation.mutants.map((m) => m.result).join(" ") || "none"}` : ""}`);
 }
 
 if (import.meta.main) main();
