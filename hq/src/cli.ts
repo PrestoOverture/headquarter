@@ -3,6 +3,7 @@
 //
 //   hq goal new <name> [--title <text>] [--from <rev>]   start goal/<name> in a linked worktree <repo>.goals/<name>
 //   hq status [--json]    every goal: head, ahead/behind main, report and approval state, open tasks
+//   hq sync <goal>       merge the latest main into goal/<goal> in its worktree (a merge commit); a conflict is aborted and listed
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
 //   hq merge <goal>       merge an approved goal into main after the full tests pass
@@ -42,6 +43,7 @@ import { render as renderReview, review } from "./review";
 import { install, installed, launcherPath, rollback } from "./versions";
 import { type Filters, filterEvents, parseDate, render, rows, stats, toCsv } from "./stats";
 import { render as renderStatus, status } from "./status";
+import { sync } from "./sync";
 
 /** Where approve shows the report and the prompt; tests pass their own so the suite stays quiet. */
 export type Writer = (text: string) => void;
@@ -219,6 +221,22 @@ async function main(argv: string[]): Promise<number> {
       console.log(o.json ? JSON.stringify({ goals }, null, 2) : renderStatus(goals));
       return 0;
     }
+    if (cmd === "sync" && goal) {
+      const r = sync(cwd, goal);
+      if (!r.ok) {
+        console.error(`not synced: ${goalBranch(goal)} conflicts with ${MAIN} in:\n${r.conflicts.map((f) => `  ${f}`).join("\n")}\nthe merge was aborted; the branch and worktree are as they were`);
+        return 1;
+      }
+      if (r.upToDate) {
+        console.log(`${goalBranch(goal)} already contains ${MAIN}; nothing to sync`);
+        return 0;
+      }
+      console.log(
+        `merged ${MAIN} (${r.main.slice(0, 12)}) into ${goalBranch(goal)}: ${r.before.slice(0, 12)} -> ${r.head.slice(0, 12)}\n` +
+          `the approval and report for ${goal} name ${r.before.slice(0, 12)} and no longer match; run \`hq report ${goal}\` again`,
+      );
+      return 0;
+    }
     if (cmd === "report" && goal) {
       const r = report(cwd, goal);
       console.log(r.markdown);
@@ -288,7 +306,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq status [--json] | hq report|approve|merge <goal> | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq status [--json] | hq sync|report|approve|merge <goal> | hq review <goal> --task <task> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 
