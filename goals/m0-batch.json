@@ -2,7 +2,9 @@
   "title": "M0 tasks 9-20 in one goal, approved once at the end",
   "acceptance": [],
   "shelved": [],
-  "known_issues": [],
+  "known_issues": [
+    "t10 hq review: the temporary branch name embeds the task id, so an id containing '..' (or other ref-invalid sequences) cannot run its review (Codex P2, round 2). Ids in use are tNN."
+  ],
   "tasks": {
     "t09": {
       "scope": "hq",
