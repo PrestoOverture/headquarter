@@ -113,6 +113,20 @@ export function newKinds(cwd: string, added: string[]): string[] {
   return [...out];
 }
 
+// CSI: ESC [ parameter bytes, intermediate bytes, final byte. OSC: ESC ] text, ended by BEL or ESC \.
+const CSI = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g;
+const OSC = /\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)/g;
+
+/** Test output as a person saw it: escape sequences gone, each \r-rewritten line down to its final text. Nothing else changes. */
+export function cleanTerminal(text: string): string {
+  return text
+    .replace(CSI, "")
+    .replace(OSC, "")
+    .split("\n")
+    .map((l) => l.replace(/\r+$/, "").replace(/^[^]*\r/, ""))
+    .join("\n");
+}
+
 function tail(text: string, n: number): { text: string; cut: number } {
   const lines = text.trimEnd().split("\n");
   return lines.length <= n ? { text: lines.join("\n"), cut: 0 } : { text: lines.slice(-n).join("\n"), cut: lines.length - n };
@@ -136,7 +150,7 @@ export function renderReport(r: {
   knownIssues: string[];
 }): string {
   const list = (items: string[], empty: string) => (items.length ? items.map((i) => `- ${i}`).join("\n") : `- ${empty}`);
-  const t = tail(r.testOutput, TEST_TAIL_LINES);
+  const t = tail(cleanTerminal(r.testOutput), TEST_TAIL_LINES);
   return [
     `# 目标报告：${r.goal}${r.title ? `：${r.title}` : ""}`,
     "",

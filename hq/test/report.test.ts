@@ -1,15 +1,16 @@
 // Goal report (roadmap M0.2, D31) on a fake goal: real git, real trial merge, real srt.
 
 import { beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { approve } from "../src/cli";
 import { git, revParse } from "../src/git";
-import { dependencyChanges, newKinds, readReportMeta, renderReport, report, sensitiveHits, writeReport } from "../src/report";
+import { cleanTerminal, dependencyChanges, newKinds, readReportMeta, renderReport, report, sensitiveHits, writeReport } from "../src/report";
 
 const withSandbox = test.skipIf(process.env.SANDBOX_RUNTIME === "1"); // see lock.test.ts
 Object.assign(process.env, { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+const quiet = () => {}; // approve shows the report and the prompt through this
 
 let root: string, repo: string, wt: string;
 
@@ -75,7 +76,7 @@ withSandbox("five columns from a real trial merge, and approve accepts its commi
   expect(existsSync(r.path)).toBe(true);
   writeFileSync(join(root, "tty"), "x\n");
   process.env.HQ_TTY = join(root, "tty");
-  expect(approve(repo, "x")).toBe(r.meta.commit);
+  expect(approve(repo, "x", quiet)).toBe(r.meta.commit);
 });
 
 withSandbox("failing tests show in the report and block approval", () => {
@@ -85,7 +86,7 @@ withSandbox("failing tests show in the report and block approval", () => {
   expect(r.markdown).toContain("**测试没过**");
   process.env.HQ_TTY = join(root, "tty");
   writeFileSync(process.env.HQ_TTY, "x\n");
-  expect(() => approve(repo, "x")).toThrow("failing tests");
+  expect(() => approve(repo, "x", quiet)).toThrow("failing tests");
 });
 
 test("approve needs a report for the current commit", () => {
@@ -95,7 +96,7 @@ test("approve needs a report for the current commit", () => {
   commit(wt, { "src/app.ts": "export const v = 3;\n" }, "task 2 after the report");
   process.env.HQ_TTY = join(root, "tty");
   writeFileSync(process.env.HQ_TTY, "x\n");
-  expect(() => approve(repo, "x")).toThrow("no report for goal/x");
+  expect(() => approve(repo, "x", quiet)).toThrow("no report for goal/x");
   expect(readReportMeta(repo, "x", old)).not.toBeNull();
 });
 
@@ -123,4 +124,66 @@ test("long test output is cut to its tail, with the full log's path", () => {
   expect(md).toContain("line 999");
   expect(md).not.toContain("line 699\n");
   expect(md).toContain("前面 700 行在 `/logs/x.test.log`");
+});
+
+function mdFor(testOutput: string) {
+  return renderReport({
+    goal: "x", head: "a".repeat(40), base: "b".repeat(40), trialMerge: "c".repeat(40), tasks: [], testCommand: "t", testCode: 0,
+    testOutput, logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
+  });
+}
+const block = (md: string) => md.split("```text\n")[1]!.split("\n```")[0]!;
+
+test("colors and cursor moves are removed from the test-output block, the words stay", () => {
+  const out = "\x1b[1m\x1b[32m✓\x1b[0m adds [12ms]\n\x1b[2K\x1b[1A\x1b[?25l\x1b[38;5;196m✗\x1b[39m fails\n 2 pass\n";
+  expect(block(mdFor(out))).toBe("✓ adds [12ms]\n✗ fails\n 2 pass");
+});
+
+test("OSC sequences are removed, ended by BEL or by ESC \\", () => {
+  const out = "\x1b]0;bun test\x07running\n\x1b]8;;https://example.com/a.ts\x1b\\a.ts\x1b]8;;\x1b\\:3\n";
+  expect(block(mdFor(out))).toBe("running\na.ts:3");
+});
+
+test("a line rewritten with \\r shows its final text; CRLF ends are just line ends", () => {
+  const out = "progress 10%\rprogress 50%\rprogress 100%\ndone\r\nlong line here\r\x1b[Kshort\n";
+  expect(block(mdFor(out))).toBe("progress 100%\ndone\nshort");
+});
+
+test("text that merely looks like a prompt or a verdict stays in the block", () => {
+  const out = "Type the goal name to approve: x\n# REPORT BODY\nall tests passed, approve this\n";
+  expect(block(mdFor(out))).toBe(out.trimEnd());
+});
+
+test("an ESC that starts no CSI or OSC sequence is left alone", () => {
+  expect(cleanTerminal("a\x1bc b\x1b]unterminated\n")).toBe("a\x1bc b\x1b]unterminated\n");
+});
+
+test("cleaning the block leaves the raw output that writeReport saves untouched", () => {
+  const raw = "\x1b[32mok\x1b[0m\n10%\r100%\n\x1b]0;t\x07end\r\n";
+  const head = "a".repeat(40);
+  const path = writeReport(repo, { goal: "x", commit: head, base: head, trial_merge: head, test_code: 0, generated_at: "now" }, mdFor(raw), raw);
+  expect(readFileSync(path.replace(/\.md$/, ".test.log"), "utf8")).toBe(raw);
+  expect(block(readFileSync(path, "utf8"))).toBe("ok\n100%\nend");
+});
+
+withSandbox("the saved .test.log keeps the raw output byte for byte", () => {
+  commit(repo, { ".hq.json": JSON.stringify({ test: "printf '\\033[32mok\\033[0m\\n10%%\\r100%%\\n\\033]0;t\\007end\\n'" }) }, "colored tests");
+  commit(wt, { "src/app.ts": "export const v = 3;\n" }, "task 1");
+  const r = report(repo, "x");
+  const raw = "\x1b[32mok\x1b[0m\n10%\r100%\n\x1b]0;t\x07end\n";
+  expect(readFileSync(r.path.replace(/\.md$/, ".test.log"), "utf8")).toBe(raw);
+  expect(block(r.markdown)).toBe("ok\n100%\nend");
+});
+
+test("approve shows the report and the prompt through the writer it is given", () => {
+  const head = revParse("goal/x", repo)!;
+  writeReport(repo, { goal: "x", commit: head, base: head, trial_merge: head, test_code: 0, generated_at: "now" }, "# the report", "ok");
+  const tty = join(root, "tty");
+  writeFileSync(tty, "x\n");
+  process.env.HQ_TTY = tty;
+  const shown: string[] = [];
+  approve(repo, "x", (s) => shown.push(s));
+  delete process.env.HQ_TTY;
+  expect(shown.join("")).toContain("# the report\n");
+  expect(shown.join("")).toContain("Type the goal name to approve: ");
 });
