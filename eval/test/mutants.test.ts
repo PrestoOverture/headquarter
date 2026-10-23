@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildMutants, gradeMutants, MAX_MUTANTS, type MutantRecord, mutantResult, splitHunks } from "../src/mutants";
+import { buildMutants, gradeMutants, MAX_MUTANTS, type MutantRecord, mutantResult, rejoin, splitHunks } from "../src/mutants";
 import { run } from "../src/sh";
 import { markdown, mutationScore, summarize, type Report } from "../src/summarize";
 import { keptTasks } from "../src/tasks";
@@ -202,11 +202,87 @@ describe("buildMutants", () => {
   });
 });
 
+describe("paths git quotes, and headers that are not understood", () => {
+  const two = (a: string, b: string) => ({ ...base_(a), ...base_(b) });
+  const base_ = (f: string) => ({ [f]: text(A) });
+  const edited = (f: string) => ({ [f]: text(change(A, { 3: ["x"] })) });
+  const names = ["x y.txt", 'q"uote.txt', "tab\there.txt", "naïve ☃.txt", "日本語.txt"];
+
+  test.each(names)("%s: its hunks are listed under the right file and every mutant git-applies", (name) => {
+    const r = repo(two(name, "plain.txt"), { ...edited(name), ...edited("plain.txt") });
+    if (/[^\x20-\x7e]|["\t]/.test(name)) expect(r.gold).toMatch(/^diff --git "a\//m);
+    expect(splitHunks(r.gold).map((h) => h.file)).toEqual([name, "plain.txt"].sort());
+    const { mutants, skipped } = buildMutants(r.gold);
+    expect(skipped).toBeUndefined();
+    expect(mutants.length).toBe(2);
+    expect(rejoin(r.gold)).toBe(r.gold);
+    for (const m of mutants) {
+      r.reset();
+      writeFileSync(join(r.dir, "m.diff"), m.patch);
+      expect(run(["git", "apply", "--check", "m.diff"], { cwd: r.dir }).out).toBe("");
+    }
+    expect(mutants.map((m) => m.file)).toEqual([name, "plain.txt"].sort());
+  });
+
+  test("a rename to a quoted name, and a quoted new file", () => {
+    const r = repo({ "old.txt": text(A), "b.txt": text(B) }, { "old.txt": null, "ünï.txt": text(change(A, { 3: ["x"] })), "b.txt": text(change(B, { 3: ["y"] })), "new file.txt": "hi\n" });
+    const { mutants, skipped } = buildMutants(r.gold, 99);
+    expect(skipped).toBeUndefined();
+    expect(mutants.map((m) => m.file).sort()).toEqual(["b.txt", "new file.txt", "ünï.txt"].sort());
+    expect(rejoin(r.gold)).toBe(r.gold);
+    for (const m of mutants) {
+      r.reset();
+      writeFileSync(join(r.dir, "m.diff"), m.patch);
+      expect(run(["git", "apply", "--check", "m.diff"], { cwd: r.dir }).out).toBe("");
+    }
+  });
+
+  const hunk = ["--- a/f", "+++ b/f", "@@ -1 +1 @@", "-a", "+b"];
+  test("a diff --git line that is not understood gives no mutants and says why", () => {
+    const bad: [string, string][] = [
+      ['diff --git "a/x y b/x y"', 'diff --git "a/x y b/x y"'],
+      ["diff --git a/x", "diff --git a/x"],
+      ["diff --git x y", "diff --git x y"],
+      ['diff --git "c/x" "d/x"', 'diff --git "c/x" "d/x"'],
+      ['diff --git "a/\\q" "b/\\q"', 'bad escape in "a/\\q"'],
+    ];
+    for (const [line, why] of bad) {
+      const patch = ["diff --git a/f b/f", ...hunk, "diff --git a/g b/g", ...hunk, line, ...hunk, ""].join("\n");
+      expect(buildMutants(patch)).toEqual({ mutants: [], left_out: 0, skipped: `unparsed diff header: ${why}` });
+    }
+  });
+  test("text before the first header or between files is not dropped silently", () => {
+    const f = ["diff --git a/f b/f", ...hunk];
+    expect(buildMutants(["From: someone", ...f, ...f, ""].join("\n")).skipped).toBe("unparsed line before a diff header: From: someone");
+    expect(buildMutants([...f, "stray", ...f, ""].join("\n")).skipped).toBe("unparsed line before a diff header: stray");
+  });
+  test("a hunk that ends early is skipped, not thrown", () => {
+    const patch = ["diff --git a/f b/f", ...hunk, "diff --git a/g b/g", "--- a/g", "+++ b/g", "@@ -1,5 +1,5 @@", " a", ""].join("\n");
+    expect(buildMutants(patch).skipped).toMatch(/^hunk body ended early/);
+  });
+  test("a patch without a final newline is skipped rather than silently completed", () => {
+    const patch = ["diff --git a/f b/f", ...hunk, "diff --git a/g b/g", ...hunk].join("\n");
+    expect(buildMutants(patch).skipped).toBe("patch not fully parsed");
+  });
+});
+
+test("gradeMutants records why a task got no mutants and grades nothing", () => {
+  const bad = ['diff --git "a/x y b/x y"', "--- a/f", "+++ b/f", "@@ -1 +1 @@", "-a", "+b", ""].join("\n");
+  const saved: unknown[] = [];
+  const out = gradeMutants(bad, [0], () => {
+    throw new Error("unreachable");
+  }, (x) => saved.push(x));
+  expect(out).toEqual({ mutants: [], mutants_left_out: 0, mutants_skipped: `unparsed diff header: ${bad.split("\n")[0]}` });
+  expect(saved).toEqual([out]);
+});
+
 test("every real gold patch splits into as many hunks as it has @@ lines", () => {
   for (const t of keptTasks(new URL("../tasks/tasks.json.gz", import.meta.url).pathname)) {
     const hunks = (t.patch.match(/^@@ /gm) ?? []).length;
     expect(splitHunks(t.patch).length).toBe(hunks);
-    const { mutants, left_out } = buildMutants(t.patch);
+    expect(rejoin(t.patch)).toBe(t.patch); // every line of every file section is accounted for
+    const { mutants, left_out, skipped } = buildMutants(t.patch);
+    expect(skipped).toBeUndefined();
     expect(mutants.length).toBe(hunks < 2 ? 0 : Math.min(hunks, MAX_MUTANTS));
     expect(mutants.length + left_out).toBe(hunks < 2 ? 0 : hunks);
   }
@@ -337,7 +413,16 @@ describe("mutation score", () => {
       mutants_left_out: 5,
       tasks: 3,
       tasks_without_mutants: ["c"],
+      tasks_skipped: [],
     });
+  });
+  test("a task skipped for an unparsed gold patch is listed with its reason, not as a single-hunk task", () => {
+    const skipped = { ...report("s", []), mutants_skipped: "unparsed diff header: diff --git x" };
+    const s = mutationScore([report("a", [mutant("killed")]), skipped])!;
+    expect(s.tasks_skipped).toEqual(["s (unparsed diff header: diff --git x)"]);
+    expect(s.tasks_without_mutants).toEqual([]);
+    expect([s.score, s.denominator, s.tasks]).toEqual([1, 1, 2]);
+    expect(markdown(summarize([report("a", [mutant("killed")]), skipped], []))).toContain("skipped (patch not understood): s (unparsed diff header: diff --git x)");
   });
   test("build_failed and not_graded stay out of the denominator", () => {
     const s = mutationScore([report("a", [mutant("killed"), mutant("build_failed"), mutant("build_failed"), mutant("not_graded")])])!;

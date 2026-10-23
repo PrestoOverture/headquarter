@@ -17,6 +17,7 @@ export type Report = {
   graded_at?: string;
   mutants?: MutantRecord[]; // only on caught tasks graded with --mutants
   mutants_left_out?: number;
+  mutants_skipped?: string; // why no mutants were built: the gold patch was not fully understood
 };
 
 /**
@@ -36,7 +37,8 @@ export function mutationScore(reports: Report[]) {
     ...counts,
     mutants_left_out: graded.reduce((n, r) => n + (r.mutants_left_out ?? 0), 0),
     tasks: graded.length,
-    tasks_without_mutants: graded.filter((r) => !r.mutants!.length).map((r) => r.instance_id),
+    tasks_without_mutants: graded.filter((r) => !r.mutants!.length && !r.mutants_skipped).map((r) => r.instance_id),
+    tasks_skipped: graded.filter((r) => r.mutants_skipped).map((r) => `${r.instance_id} (${r.mutants_skipped})`),
   };
 }
 
@@ -82,7 +84,7 @@ export function markdown(s: ReturnType<typeof summarize>): string {
     const score = mu.score === null ? "n/a" : `${(mu.score * 100).toFixed(1)}%`;
     lines.push(
       `\n### Mutation score ${score} (killed ${mu.killed}/${mu.denominator} = killed + survived)\n`,
-      `${mu.tasks} tasks graded; flaky ${mu.flaky}, apply_failed ${mu.apply_failed}, build_failed ${mu.build_failed}, not_graded ${mu.not_graded}; mutants_left_out (cap) ${mu.mutants_left_out}; no mutants (single hunk): ${mu.tasks_without_mutants.join(", ") || "none"}`,
+      `${mu.tasks} tasks graded; flaky ${mu.flaky}, apply_failed ${mu.apply_failed}, build_failed ${mu.build_failed}, not_graded ${mu.not_graded}; mutants_left_out (cap) ${mu.mutants_left_out}; no mutants (single hunk): ${mu.tasks_without_mutants.join(", ") || "none"}; skipped (patch not understood): ${mu.tasks_skipped.join(", ") || "none"}`,
     );
   }
   if (s.missing.length) lines.push(`\nNo report (job failed): ${s.missing.join(", ")}`);

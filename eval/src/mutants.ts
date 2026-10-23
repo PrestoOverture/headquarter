@@ -24,10 +24,43 @@ export type MutantRecord = {
   runs: number[];
 };
 
+/** What gradeMutants hands to report.json. */
+export type MutantsReport = { mutants: MutantRecord[]; mutants_left_out: number; mutants_skipped?: string };
+
 type Hunk = { header: string; lines: string[] }; // lines[0] is the @@ line
 type FileDiff = { file: string; head: string[]; hunks: Hunk[] };
 
 const HEADER = /^@@ -(\d+)(,\d+)? \+(\d+)(,\d+)? @@(.*)$/;
+
+const ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+const QUOTED = String.raw`"(?:[^"\\]|\\.)*"`;
+const GIT_HEADER = new RegExp(`^diff --git (a/.+|${QUOTED}) (b/.+|${QUOTED})$`);
+
+/** Undoes git's C-style quoting of a path: \" \\ \t \n and \ooo octal bytes (non-ASCII names). */
+function unquote(q: string): string {
+  const bytes: number[] = [];
+  const body = q.slice(1, -1);
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    const oct = /^[0-7]{3}/.exec(body.slice(i + 1, i + 4));
+    if (c !== "\\") bytes.push(...new TextEncoder().encode(c));
+    else if (oct) {
+      bytes.push(parseInt(oct[0], 8));
+      i += 3;
+    } else if (ESCAPES[body[i + 1]!] !== undefined) bytes.push(ESCAPES[body[++i]!]!);
+    else throw new Error(`unparsed diff header: bad escape in ${q}`);
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+/** The b/ path of a `diff --git` line, quoted or not; throws when the line is not understood. */
+function headerFile(line: string): string {
+  const m = GIT_HEADER.exec(line);
+  if (!m) throw new Error(`unparsed diff header: ${line}`);
+  const [a, b] = [m[1]!, m[2]!].map((p) => (p.startsWith('"') ? unquote(p) : p));
+  if (!a!.startsWith("a/") || !b!.startsWith("b/")) throw new Error(`unparsed diff header: ${line}`);
+  return b!.slice(2);
+}
 
 function parseHunk(lines: string[], at: number): Hunk {
   const m = HEADER.exec(lines[at]!);
@@ -54,12 +87,8 @@ function parseFiles(patch: string): FileDiff[] {
   if (lines.at(-1) === "") lines.pop();
   const files: FileDiff[] = [];
   for (let i = 0; i < lines.length; ) {
-    const m = /^diff --git a\/(.+) b\/(.+)$/.exec(lines[i]!);
-    if (!m) {
-      i++;
-      continue;
-    }
-    const file: FileDiff = { file: m[2]!, head: [lines[i++]!], hunks: [] };
+    if (!lines[i]!.startsWith("diff --git ")) throw new Error(`unparsed line before a diff header: ${lines[i]}`);
+    const file: FileDiff = { file: headerFile(lines[i]!), head: [lines[i++]!], hunks: [] };
     while (i < lines.length && !lines[i]!.startsWith("@@ ") && !lines[i]!.startsWith("diff --git ")) file.head.push(lines[i++]!);
     while (lines[i]?.startsWith("@@ ")) {
       const h = parseHunk(lines, i);
@@ -69,6 +98,13 @@ function parseFiles(patch: string): FileDiff[] {
     files.push(file);
   }
   return files;
+}
+
+const fileLines = (f: FileDiff) => [...f.head, ...f.hunks.flatMap((h) => h.lines)];
+
+/** The patch put back together from its parsed file sections; equal to the patch when every line was accounted for. */
+export function rejoin(patch: string): string {
+  return parseFiles(patch).flatMap(fileLines).join("\n") + "\n";
 }
 
 /** Every @@ hunk of every file, in patch order. */
@@ -101,17 +137,25 @@ function withoutHunk(f: FileDiff, drop: number): string[] {
 /**
  * One mutant per hunk, first MAX_MUTANTS in patch order; `left_out` counts the hunks past
  * the cap that got none. A single hunk gives no mutant: the patch minus it is the buggy
- * code, which the buggy side of grading already covers.
+ * code, which the buggy side of grading already covers. A patch that is not fully understood
+ * (an unparsed `diff --git` line, a bad hunk, a line the parse would drop) gives no mutants
+ * and a `skipped` reason: a mutant must never leave out more than the one hunk.
  */
-export function buildMutants(patch: string, max = MAX_MUTANTS): { mutants: Mutant[]; left_out: number } {
-  const files = parseFiles(patch);
+export function buildMutants(patch: string, max = MAX_MUTANTS): { mutants: Mutant[]; left_out: number; skipped?: string } {
+  let files: FileDiff[];
+  try {
+    files = parseFiles(patch);
+  } catch (e) {
+    return { mutants: [], left_out: 0, skipped: e instanceof Error ? e.message : String(e) };
+  }
+  if (files.flatMap(fileLines).join("\n") + "\n" !== patch) return { mutants: [], left_out: 0, skipped: "patch not fully parsed" };
   const total = files.reduce((n, f) => n + f.hunks.length, 0);
   if (total < 2) return { mutants: [], left_out: 0 };
   const mutants: Mutant[] = [];
   files.forEach((f, fi) =>
     f.hunks.forEach((h, hi) => {
       if (mutants.length >= max) return;
-      const lines = files.flatMap((g, gi) => (gi === fi ? withoutHunk(g, hi) : [...g.head, ...g.hunks.flatMap((x) => x.lines)]));
+      const lines = files.flatMap((g, gi) => (gi === fi ? withoutHunk(g, hi) : fileLines(g)));
       mutants.push({ file: f.file, hunk: h.header, patch: lines.join("\n") + "\n" });
     }),
   );
@@ -145,11 +189,11 @@ export function gradeMutants(
   patch: string,
   fixedRebuild: number[],
   grade: (m: Mutant, i: number) => Side & { rebuild: number[] },
-  save: (r: { mutants: MutantRecord[]; mutants_left_out: number }) => void,
-): { mutants: MutantRecord[]; mutants_left_out: number } {
+  save: (r: MutantsReport) => void,
+): MutantsReport {
   const built = buildMutants(patch);
   const mutants: MutantRecord[] = built.mutants.map((m) => ({ file: m.file, hunk: m.hunk, result: "not_graded", rebuild: [], runs: [] }));
-  const out = { mutants, mutants_left_out: built.left_out };
+  const out: MutantsReport = { mutants, mutants_left_out: built.left_out, ...(built.skipped ? { mutants_skipped: built.skipped } : {}) };
   save(out);
   built.mutants.forEach((m, i) => {
     try {
