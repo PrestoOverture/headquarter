@@ -3,6 +3,7 @@
 // conclusions; record model versions; report false rejects; split by difficulty.
 
 import { DIFFICULTIES, type Event, GATES, type Gate } from "./ledger";
+import { LINE_LIMIT } from "./lines";
 
 export const ESCAPE_WINDOW_DAYS = 14;
 export const MIN_TASKS_FOR_CONCLUSIONS = 50;
@@ -21,6 +22,7 @@ export type TaskRow = {
   shelved_why?: string;
   gates: Partial<Record<Gate, { pass: number; fail: number; claimed_done_fail: number }>>;
   cost_usd: number;
+  size: { added: number; deleted: number; lines: number; end: string } | null; // null: not checked
   causes: string[];
   false_rejects: number;
   escaped: boolean; // rework needed within the escape window after the merge
@@ -37,7 +39,7 @@ export function rows(events: Event[], now = new Date()): TaskRow[] {
     if (e.type === "task.start") {
       byTask.set(e.task, {
         task: e.task, goal: e.goal, title: e.title, difficulty: e.difficulty, model: e.model, base: e.base, started_at: e.at,
-        status: "open", gates: {}, cost_usd: 0, causes: [], false_rejects: 0, escaped: false, escape_window_open: false,
+        status: "open", gates: {}, cost_usd: 0, size: null, causes: [], false_rejects: 0, escaped: false, escape_window_open: false,
       });
       continue;
     }
@@ -52,6 +54,7 @@ export function rows(events: Event[], now = new Date()): TaskRow[] {
         if (e.claimed_done) g.claimed_done_fail++;
       }
     } else if (e.type === "task.cost") r.cost_usd += e.usd;
+    else if (e.type === "task.lines") r.size = { added: e.added, deleted: e.deleted, lines: e.added + e.deleted, end: e.end };
     else if (e.type === "task.shelve") {
       r.status = "shelved";
       r.shelved_why = e.why;
@@ -89,6 +92,8 @@ export function stats(events: Event[], now = new Date()) {
     }),
   ) as Record<Gate, Ratio>;
   const fails = rs.reduce((s, r) => s + Object.values(r.gates).reduce((t, g) => t + (g?.fail ?? 0), 0), 0);
+  const sized = rs.filter((r) => r.size);
+  const small = sized.filter((r) => r.size!.lines < LINE_LIMIT);
   const causes: Record<string, number> = {};
   for (const r of rs) for (const c of r.causes) causes[c] = (causes[c] ?? 0) + 1;
   const byDifficulty = Object.fromEntries(
@@ -112,6 +117,8 @@ export function stats(events: Event[], now = new Date()) {
     active_s_per_merged: merged.length ? activeS / merged.length : null,
     total_active_s: activeS,
     false_rejects: ratio(rs.reduce((s, r) => s + r.false_rejects, 0), fails),
+    size_checked: ratio(sized.length, started), // a task with no size is not checked, never passing
+    under_limit: small.map((r) => ({ task: r.task, lines: r.size!.lines })),
     failure_causes: causes,
     by_difficulty: byDifficulty,
   };
@@ -136,6 +143,9 @@ export function render(s: ReturnType<typeof stats>): string {
     `| 每个合格任务的成本 | ${s.cost_per_merged_usd === null ? "—" : `$${s.cost_per_merged_usd.toFixed(2)}`}（共 $${s.total_cost_usd.toFixed(2)}） |`,
     `| 每个合格任务的主动时间 | ${s.active_s_per_merged === null ? "—" : `${(s.active_s_per_merged / 60).toFixed(1)} 分钟`}（共 ${(s.total_active_s / 60).toFixed(1)} 分钟） |`,
     `| 误拒（占关卡不过的次数） | ${pct(s.false_rejects)} |`,
+    "",
+    `任务大小：${s.size_checked.n}/${s.size_checked.of} 个任务有大小，${s.size_checked.of - s.size_checked.n} 个没查`,
+    `不满 ${LINE_LIMIT} 行：${s.under_limit.map((t) => `${t.task} ${t.lines} 行`).join("、") || "—"}`,
     "",
     `失败原因：${Object.entries(s.failure_causes).map(([c, n]) => `${c} ${n}`).join("、") || "—"}`,
     "",

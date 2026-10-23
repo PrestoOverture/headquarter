@@ -15,6 +15,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/status.ts       总览（`hq status`）：每个目标分支的头、领先落后、报告与批准状态、未完成任务；只读
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
   src/ledger.ts       记账（M0.3）：~/.hq/ledger/<仓库>/events.jsonl，只追加
+  src/lines.ts        任务大小（200 行规则）：基线到结束 commit 的增删行数，只算文本文件，不算 goals/*.json 和锁文件
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
   src/versions.ts     安装版本（M0.4）：~/.hq/versions/<commit>、current / previous、启动器 ~/.hq/bin/hq
   src/guard.ts        reference-transaction 钩子：main 只能移到已批准目标的合并提交
@@ -35,7 +36,7 @@ goals/<目标>.json      目标分支上的目标文件：title、shelved（搁�
 | hq 合入锁 | 没有你的批准，main 不动（D29） | `hq approve <目标>`（只认终端输入，要先有这个 commit 的绿色报告）、`hq merge <目标>`、`hq install-hook` | git、srt；批准记录在 `$HQ_HOME`（默认 `~/.hq`） |
 | hq 目标报告 | 批准前读的五栏报告（D31） | `hq report <目标>` | 合并预演、`.hq.json`（`sensitive` 可覆盖默认敏感路径）、`goals/<目标>.json` |
 | hq 总览 | 每个目标现在在哪一步 | `hq status [--json]`，只读 | git、报告和批准记录、记账 |
-| hq 记账 | M0 的指标数据（测评、D39） | `hq task start/gate/cost/shelve/cause/false-reject`、`hq escalate`、`hq escape`、`hq stats [--json\|--tasks]`；approve 和 merge 自动记 | `$HQ_HOME/ledger`（执行者沙箱写不了） |
+| hq 记账 | M0 的指标数据（测评、D39） | `hq task start/gate/cost/lines/shelve/cause/false-reject`、`hq escalate`、`hq escape`、`hq stats [--json\|--tasks]`；approve 和 merge 自动记 | `$HQ_HOME/ledger`（执行者沙箱写不了） |
 | main 守卫钩子 | 兜底：不在沙箱里的会话也改不了 main | git 调 `~/.hq/bin/hq guard`；人手动改 main 时设 `HQ_ALLOW_MAIN=1` | hq 的批准记录、安装版本 |
 | hq 安装版本 | 运行的 hq 和被改的 hq 分开（D44） | `hq install [<rev>]`、`hq rollback`、`hq version` | git、bun；`$HQ_HOME/versions`（执行者沙箱写不了） |
 | eval | 第 0 步的出题与判卷 | GitHub Actions 的 `step0` workflow | Docker、Claude Code |
