@@ -15,6 +15,7 @@
 //   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>]
 //   hq task gate <task> <self_test|full_tests|codex_review|claude_diff> <pass|fail> [--claimed-done] [--note <text>]
 //   hq task cost <task> <usd> [--model <id>]
+//   hq task lines <task> [--rev <rev>]
 //   hq task shelve <task> --why <text>
 //   hq task cause <task> <cheat|misunderstanding|other> [--note <text>]
 //   hq task false-reject <task> <gate> [--note <text>]
@@ -29,6 +30,7 @@ import { git, revParse } from "./git";
 import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
 import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
+import { recordLines } from "./lines";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
 import { install, installed, launcherPath, rollback } from "./versions";
@@ -96,7 +98,7 @@ export function record(cwd: string, args: string[]): string {
     options: {
       goal: { type: "string" }, title: { type: "string" }, difficulty: { type: "string", default: "medium" },
       model: { type: "string" }, base: { type: "string" }, "claimed-done": { type: "boolean", default: false },
-      note: { type: "string" }, why: { type: "string" }, task: { type: "string" }, minutes: { type: "string" },
+      note: { type: "string" }, rev: { type: "string" }, why: { type: "string" }, task: { type: "string" }, minutes: { type: "string" },
     },
   });
   const [cmd, sub, ...rest] = p;
@@ -137,6 +139,10 @@ export function record(cwd: string, args: string[]): string {
       if (!(usd >= 0)) throw new Error("<usd> must be a number");
       append(cwd, { type: "task.cost", task, usd, model: o.model });
       return `cost recorded for task ${task}`;
+    }
+    case "lines": {
+      const e = recordLines(cwd, task, o.rev);
+      return `task ${task}: ${e.added + e.deleted} lines (+${e.added} -${e.deleted}) up to ${e.end.slice(0, 12)}`;
     }
     case "shelve":
       append(cwd, { type: "task.shelve", task, why: need(o.why, "--why") });
@@ -189,6 +195,7 @@ async function main(argv: string[]): Promise<number> {
         return 1;
       }
       console.log(`merged goal ${goal} into ${MAIN} as ${r.mergeCommit.slice(0, 12)}\nto take it back out: ${r.revert}`);
+      for (const err of r.linesErrors) console.error(`could not measure task size: ${err}`);
       if (r.reinstalled) console.log(`hq changed: installed ${r.reinstalled.slice(0, 12)} (hq rollback to undo)`);
       if (r.reinstallError) console.error(`hq changed but reinstalling failed; still running ${installed("current")}: ${r.reinstallError}`);
       return 0;

@@ -9,13 +9,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeApproval, goalBranch, MAIN, readApproval } from "./approval";
 import { commonDir, git, revParse, run, worktreeOf } from "./git";
-import { append } from "./ledger";
+import { append, readEvents } from "./ledger";
+import { recordLines } from "./lines";
 import { sandboxed } from "./sandbox";
+import { rows } from "./stats";
 import { reinstallIfChanged } from "./versions";
 
 export type Config = { test: string; sensitive?: string[] };
 export type MergeResult =
-  | { ok: true; mergeCommit: string; revert: string; testOutput: string; reinstalled: string | null; reinstallError?: string }
+  | { ok: true; mergeCommit: string; revert: string; testOutput: string; reinstalled: string | null; reinstallError?: string; linesErrors: string[] }
   | { ok: false; reason: string; testOutput?: string };
 
 /** The config comes from main, so a goal cannot weaken the tests it is judged by. */
@@ -73,6 +75,15 @@ export function merge(cwd: string, goal: string): MergeResult {
     if (wt) git(["merge", "--ff-only", "-q", merged], wt);
     else git(["update-ref", `refs/heads/${MAIN}`, merged, base], cwd);
     consumeApproval(cwd, goal, merged);
+    // Sizes before the merge event: after it, the goal's tasks no longer read as open.
+    const linesErrors: string[] = [];
+    for (const r of rows(readEvents(cwd)).filter((r) => r.goal === goal && r.status === "open")) {
+      try {
+        recordLines(cwd, r.task, head);
+      } catch (e) {
+        linesErrors.push(`${r.task}: ${(e as Error).message}`);
+      }
+    }
     append(cwd, { type: "merge", goal, commit: head, merge_commit: merged });
     // D44: a goal that changed hq takes effect only now, from the merged main.
     let reinstalled: string | null = null;
@@ -82,6 +93,6 @@ export function merge(cwd: string, goal: string): MergeResult {
     } catch (e) {
       reinstallError = (e as Error).message;
     }
-    return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput, reinstalled, reinstallError };
+    return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput, reinstalled, reinstallError, linesErrors };
   });
 }
