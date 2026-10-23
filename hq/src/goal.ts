@@ -1,6 +1,6 @@
 // `hq goal new`: a goal branch, its linked worktree and its goal file, in one step.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { goalBranch, MAIN, validGoal } from "./approval";
 import { commonDir, git, revParse, run } from "./git";
@@ -20,17 +20,32 @@ export function newGoal(cwd: string, goal: string, opts: { title?: string; from?
   const from = opts.from ?? MAIN;
   if (!revParse(from, cwd)) throw new Error(`${from} is not a commit`);
 
-  git(["worktree", "add", "-q", "-b", branch, path, `${from}^{commit}`], cwd);
+  const parent = dirname(path);
+  const parentExisted = existsSync(parent);
   try {
+    git(["worktree", "add", "-q", "-b", branch, path, `${from}^{commit}`], cwd);
     mkdirSync(join(path, "goals"), { recursive: true });
     const file = { title: opts.title ?? goal, acceptance: [], shelved: [], known_issues: [] };
     writeFileSync(join(path, "goals", `${goal}.json`), JSON.stringify(file, null, 2) + "\n");
     git(["add", `goals/${goal}.json`], path);
     git(["commit", "-q", "-m", `goal ${goal}: start`], path);
   } catch (e) {
-    git(["worktree", "remove", "--force", path], cwd);
-    git(["branch", "-D", branch], cwd);
+    rollback(cwd, branch, path, parentExisted ? null : parent);
     throw e;
   }
   return { path, branch };
+}
+
+/** Undoes whatever `git worktree add` and the commit got to; each step is best effort so the caller's error stays the one reported. */
+function rollback(cwd: string, branch: string, path: string, createdParent: string | null) {
+  const attempt = (f: () => unknown) => {
+    try {
+      f();
+    } catch {}
+  };
+  attempt(() => run(["git", "worktree", "remove", "--force", path], cwd));
+  attempt(() => rmSync(path, { recursive: true, force: true }));
+  attempt(() => run(["git", "worktree", "prune"], cwd));
+  attempt(() => run(["git", "branch", "-D", branch], cwd));
+  if (createdParent) attempt(() => rmdirSync(createdParent));
 }

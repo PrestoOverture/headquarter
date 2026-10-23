@@ -1,7 +1,7 @@
 // End-to-end tests of `hq goal new`: the real CLI against a real git repository in a temp dir.
 
 import { beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, run } from "../src/git";
@@ -116,6 +116,20 @@ test("refuses a --from that is not a commit", () => {
   refuses(["nofrom", "--from", "no-such-rev"], /no-such-rev is not a commit/);
   const tree = git(["rev-parse", "main^{tree}"], repo);
   refuses(["nofrom", "--from", tree], /is not a commit/);
+});
+
+test("a failing post-checkout hook leaves nothing behind, reports its error, and a retry works", () => {
+  const hook = join(repo, ".git", "hooks", "post-checkout");
+  writeFileSync(hook, "#!/bin/sh\necho hook-says-no >&2\nexit 1\n");
+  chmodSync(hook, 0o755);
+  refuses(["hooked"], /hook-says-no/);
+  expect(git(["branch", "--list", "goal/hooked"], repo)).toBe("");
+  expect(existsSync(goals)).toBe(false);
+
+  rmSync(hook);
+  const r = hq(repo, "goal", "new", "hooked");
+  expect(r.code).toBe(0);
+  expect(git(["log", "-1", "--format=%s", "goal/hooked"], repo)).toBe("goal hooked: start");
 });
 
 test("a second run with the same name refuses and leaves the first goal alone", () => {
