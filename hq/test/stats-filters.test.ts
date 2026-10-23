@@ -116,6 +116,53 @@ describe("--since / --until", () => {
     expect(all.total_active_s).toBe(600 + 1800 + 60);
   });
 
+  test("a goal-level event belongs to the tasks open when it happened, not to later tasks of the goal", () => {
+    start("u1", "u", day(60));
+    put(day(60, 1), { type: "escalate", goal: "u", task: "u1", why: "unclear", minutes: 30 });
+    put(day(60, 2), { type: "report.shown", goal: "u", commit: "c1" });
+    put(day(60, 3), { type: "approve", goal: "u", commit: "c1", active_s: 600 });
+    put(day(62), { type: "merge", goal: "u", commit: "c1", merge_commit: "m1" });
+    start("u2", "u", day(65));
+    put(day(66), { type: "approve", goal: "u", commit: "c2", active_s: 60 });
+    put(day(67), { type: "merge", goal: "u", commit: "c2", merge_commit: "m2" });
+
+    const early = json("--goal", "u", "--until", "2026-12-03"); // day 63: only u1 is in
+    expect(early.tasks).toBe(1);
+    expect(early.escalation_rate).toMatchObject({ n: 1, of: 1 });
+    expect(early.total_active_s).toBe(600 + 1800); // u2's 60 s approve is not u1's
+    expect(early.pass_rate).toMatchObject({ n: 1, of: 1 });
+
+    const late = json("--goal", "u", "--since", "2026-12-03");
+    expect(late.tasks).toBe(1);
+    expect(late.escalation_rate).toMatchObject({ n: 0, of: 1 });
+    expect(late.total_active_s).toBe(60);
+
+    const both = json("--goal", "u");
+    expect(both.escalation_rate).toMatchObject({ n: 1, of: 2 });
+    expect(both.total_active_s).toBe(600 + 1800 + 60);
+  });
+
+  test("an event of a task shelved before it does not follow that task", () => {
+    start("s1", "s", day(70));
+    put(day(71), { type: "task.shelve", task: "s1", why: "dropped" });
+    start("s2", "s", day(72));
+    put(day(73), { type: "approve", goal: "s", commit: "c1", active_s: 60 });
+    expect(json("--goal", "s", "--until", "2026-12-12").total_active_s).toBe(0); // day 71: only s1, shelved by day 73
+    expect(json("--goal", "s", "--since", "2026-12-12").total_active_s).toBe(60);
+  });
+
+  test("an event that belongs to no task is dropped under any filter", () => {
+    put(day(-5), { type: "approve", goal: "a", commit: "c0", active_s: 9000 });
+    put(day(-4), { type: "escalate", goal: "a", why: "early", minutes: 100 });
+    const all = json();
+    expect(all.total_active_s).toBe(9000 + 6000 + 60 + 600 + 60 + 120); // unfiltered keeps every event
+    for (const args of [["--goal", "a"], ["--since", "2026-09-01"], ["--until", "2027-01-01"], ["--goal", "a", "--since", "2026-09-01"]]) {
+      const s = json(...args);
+      expect(s.total_active_s).toBe(args.includes("--goal") ? 120 : 60 + 120 + 600 + 60);
+      expect(s.escalation_rate.n).toBe(args.includes("--goal") ? 1 : 2);
+    }
+  });
+
   test("a time zone offset moves the bound", () => {
     expect(tasks("--since", "2026-10-03T08:00:00+08:00")).toEqual(["a2"]); // = 2026-10-03T00:00Z
     expect(tasks("--since", "2026-10-03T09:00:00+08:00")).toEqual(["a2"]);

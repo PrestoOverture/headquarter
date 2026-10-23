@@ -48,33 +48,34 @@ export function parseDate(text: string, flag: string): Date {
 
 /**
  * Keeps the tasks of the goals (--goal) that started in [since, until) and all events of those
- * tasks. A goal-level event (report shown, approve, merge, escalate) is kept when its goal has a
- * kept task and, under a time window, it is at or after the earliest start of that goal's kept
- * tasks; an escalate that names a task is kept only with that task. Goal-level events from before
- * or outside the window thus never feed the numerators of tasks that are not counted.
+ * tasks. A goal-level event (report shown, approve, merge, escalate) belongs to the tasks open on
+ * its goal when it happened: started at or before it, not shelved before it, not closed by an
+ * earlier merge of the goal; an escalate that names a task belongs to that task only. It is kept
+ * when at least one task it belongs to is kept, so no numerator comes from uncounted tasks.
  */
 export function filterEvents(events: Event[], f: Filters): Event[] {
-  const timed = f.since !== undefined || f.until !== undefined;
-  if (!f.goals && !timed) return events;
-  const kept = new Map<string, string>(); // task → goal
+  if (!f.goals && f.since === undefined && f.until === undefined) return events;
+  const starts = new Map<string, { goal: string; at: number }>();
+  for (const e of events) if (e.type === "task.start") starts.set(e.task, { goal: e.goal, at: Date.parse(e.at) });
+  const shelvedAt = new Map<string, number>();
+  const mergesOf = new Map<string, number[]>(); // goal → merge times
   for (const e of events) {
-    if (e.type !== "task.start") continue;
-    const t = Date.parse(e.at);
-    const inGoals = !f.goals || f.goals.includes(e.goal);
-    const inWindow = (!f.since || t >= f.since.getTime()) && (!f.until || t < f.until.getTime());
-    if (inGoals && inWindow) kept.set(e.task, e.goal);
-    else kept.delete(e.task);
+    if (e.type === "task.shelve" && !shelvedAt.has(e.task)) shelvedAt.set(e.task, Date.parse(e.at));
+    else if (e.type === "merge") mergesOf.set(e.goal, [...(mergesOf.get(e.goal) ?? []), Date.parse(e.at)]);
   }
-  const floor = new Map<string, number>(); // goal → earliest start among its kept tasks
-  for (const e of events) {
-    if (e.type !== "task.start" || !kept.has(e.task)) continue;
-    floor.set(e.goal, Math.min(floor.get(e.goal) ?? Infinity, Date.parse(e.at)));
+  const kept = new Set<string>();
+  for (const [task, s] of starts) {
+    const inGoals = !f.goals || f.goals.includes(s.goal);
+    const inWindow = (!f.since || s.at >= f.since.getTime()) && (!f.until || s.at < f.until.getTime());
+    if (inGoals && inWindow) kept.add(task);
   }
+  const open = (task: string, s: { goal: string; at: number }, t: number) =>
+    s.at <= t && !((shelvedAt.get(task) ?? Infinity) < t) && !(mergesOf.get(s.goal) ?? []).some((m) => m >= s.at && m < t);
   return events.filter((e) => {
     if (e.type === "escalate" && e.task) return kept.has(e.task);
     if (e.type === "report.shown" || e.type === "approve" || e.type === "merge" || e.type === "escalate") {
-      const from = floor.get(e.goal);
-      return from !== undefined && (!timed || Date.parse(e.at) >= from);
+      const t = Date.parse(e.at);
+      return [...starts].some(([task, s]) => s.goal === e.goal && kept.has(task) && open(task, s, t));
     }
     return kept.has(e.task);
   });
