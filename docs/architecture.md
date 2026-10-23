@@ -11,6 +11,7 @@
 hq/                   合入锁（M0.1）：hq approve / merge / install-hook，git 的 main 守卫钩子
   src/approval.ts     批准记录：~/.hq/approvals/<仓库>/，绑定一个 commit，合入后作废
   src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
+  src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
   src/ledger.ts       记账（M0.3）：~/.hq/ledger/<仓库>/events.jsonl，只追加
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
