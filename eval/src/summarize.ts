@@ -1,15 +1,46 @@
 // Catch rate over every graded task (roadmap 第 0 步 stop line: below half, fix the writer
 // before moving on). Invalid submissions count as misses: the writer failed to produce a
 // usable test. Tasks with no report (writer or grade job crashed) or a grade_error are
-// listed, not counted.
+// listed, not counted. Reports graded with --mutants also give a mutation score.
 //
 //   bun src/summarize.ts <results dir>    → summary.json in that dir, Markdown on stdout
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Verdict } from "./judge";
+import type { MutantRecord, MutantResult } from "./mutants";
 
-export type Report = { instance_id: string; language: string; verdict: Verdict; graded_at?: string };
+export type Report = {
+  instance_id: string;
+  language: string;
+  verdict: Verdict;
+  graded_at?: string;
+  mutants?: MutantRecord[]; // only on caught tasks graded with --mutants
+  mutants_left_out?: number;
+  mutants_skipped?: string; // why no mutants were built: the gold patch was not fully understood
+};
+
+/**
+ * killed ÷ (killed + survived) over every graded mutant. Flaky, apply_failed, build_failed
+ * and not_graded mutants are counted but stay out of the denominator; a report without a mutants list adds
+ * nothing, so it never counts as killed. null when no report has mutation data.
+ */
+export function mutationScore(reports: Report[]) {
+  const graded = reports.filter((r) => r.mutants);
+  if (!graded.length) return null;
+  const counts: Record<MutantResult, number> = { killed: 0, survived: 0, flaky: 0, apply_failed: 0, build_failed: 0, not_graded: 0 };
+  for (const r of graded) for (const m of r.mutants!) counts[m.result]++;
+  const denominator = counts.killed + counts.survived;
+  return {
+    score: denominator ? counts.killed / denominator : null,
+    denominator,
+    ...counts,
+    mutants_left_out: graded.reduce((n, r) => n + (r.mutants_left_out ?? 0), 0),
+    tasks: graded.length,
+    tasks_without_mutants: graded.filter((r) => !r.mutants!.length && !r.mutants_skipped).map((r) => r.instance_id),
+    tasks_skipped: graded.filter((r) => r.mutants_skipped).map((r) => `${r.instance_id} (${r.mutants_skipped})`),
+  };
+}
 
 export function summarize(reports: Report[], missing: string[]) {
   const counts: Partial<Record<Verdict, number>> = {};
@@ -22,6 +53,7 @@ export function summarize(reports: Report[], missing: string[]) {
     catch_rate: graded ? caught / graded : null,
     passes_stop_line: graded ? caught / graded >= 0.5 : null,
     counts,
+    mutation: mutationScore(reports),
     missing,
     by_task: Object.fromEntries(reports.map((r) => [r.instance_id, r.verdict])),
   };
@@ -47,6 +79,14 @@ export function markdown(s: ReturnType<typeof summarize>): string {
     "| verdict | tasks |\n| --- | --- |",
   ];
   for (const [v, n] of Object.entries(s.counts).sort((a, b) => b[1] - a[1])) lines.push(`| ${v} | ${n} |`);
+  const mu = s.mutation;
+  if (mu) {
+    const score = mu.score === null ? "n/a" : `${(mu.score * 100).toFixed(1)}%`;
+    lines.push(
+      `\n### Mutation score ${score} (killed ${mu.killed}/${mu.denominator} = killed + survived)\n`,
+      `${mu.tasks} tasks graded; flaky ${mu.flaky}, apply_failed ${mu.apply_failed}, build_failed ${mu.build_failed}, not_graded ${mu.not_graded}; mutants_left_out (cap) ${mu.mutants_left_out}; no mutants (single hunk): ${mu.tasks_without_mutants.join(", ") || "none"}; skipped (patch not understood): ${mu.tasks_skipped.join(", ") || "none"}`,
+    );
+  }
   if (s.missing.length) lines.push(`\nNo report (job failed): ${s.missing.join(", ")}`);
   return lines.join("\n");
 }

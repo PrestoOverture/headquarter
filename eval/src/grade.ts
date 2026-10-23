@@ -7,11 +7,16 @@
 //
 // Reads <results>/<id>/writer.patch, writes report.json (with graded_at, for merge-runs)
 // and buggy.log / fixed.log.
+//
+// With --mutants, a caught task also gets its gold patch graded minus one hunk at a time
+// (mutants.ts): the same run on each mutant, logged to mutant-<n>.log. report.json is
+// written with the verdict first and rewritten after each mutant.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { SCRIPT, type Side, verdict } from "./judge";
+import { gradeMutants } from "./mutants";
 import { run, sh, tail } from "./sh";
 import { findTask, readTasks, type Task } from "./tasks";
 
@@ -42,14 +47,15 @@ function applyPatch(ctr: string, patch: string, name: string): { ok: boolean; ou
   return { ok: false, out };
 }
 
-function gradeSide(task: Task, writerPatch: string, fixed: boolean, logPath: string): Side & { log_tail: string } {
-  const ctr = `step0-${fixed ? "fixed" : "buggy"}-${task.instance_id}`.toLowerCase();
+type Graded = Side & { rebuild: number[]; log_tail: string };
+
+/** Fresh container from the task image, the patches applied in order, rebuild, then the writer's script RERUNS times. */
+function gradeRun(task: Task, ctr: string, patches: [string, string][], logPath: string): Graded {
   const lines: string[] = [];
-  const side: Side = { applied: false, runs: [] };
+  const side: Side & { rebuild: number[] } = { applied: false, runs: [], rebuild: [] };
   run(["docker", "rm", "-f", ctr]);
   sh(["docker", "run", "-d", "--platform", task.platform, "--name", ctr, task.image, "sleep", "infinity"]);
   try {
-    const patches: [string, string][] = fixed ? [["gold", task.patch], ["writer", writerPatch]] : [["writer", writerPatch]];
     for (const [name, patch] of patches) {
       const r = applyPatch(ctr, patch, name);
       lines.push(`## ${name} patch\n${r.out}`);
@@ -59,6 +65,7 @@ function gradeSide(task: Task, writerPatch: string, fixed: boolean, logPath: str
     for (const cmd of task.rebuild_cmds) {
       const r = exec(ctr, cmd, undefined, REBUILD_TIMEOUT_MS);
       if (r.timedOut) side.rebuild_timed_out = true;
+      side.rebuild.push(r.timedOut ? -1 : r.code);
       lines.push(`## rebuild\n$ ${cmd}\n[exit ${r.code}${r.timedOut ? ", timeout" : ""}]\n${r.out}`);
     }
     // The writer ran its tests with no network; so do we. With network, NuGet's
@@ -78,9 +85,16 @@ function gradeSide(task: Task, writerPatch: string, fixed: boolean, logPath: str
   }
 }
 
+function gradeSide(task: Task, writerPatch: string, fixed: boolean, logPath: string): Graded {
+  const ctr = `step0-${fixed ? "fixed" : "buggy"}-${task.instance_id}`.toLowerCase();
+  return gradeRun(task, ctr, fixed ? [["gold", task.patch], ["writer", writerPatch]] : [["writer", writerPatch]], logPath);
+}
+
 function main() {
-  const { values } = parseArgs({ options: { tasks: { type: "string" }, id: { type: "string" }, results: { type: "string" } } });
-  if (!values.tasks || !values.id || !values.results) throw new Error("usage: --tasks <file> --id <instance_id> --results <dir>");
+  const { values } = parseArgs({
+    options: { tasks: { type: "string" }, id: { type: "string" }, results: { type: "string" }, mutants: { type: "boolean", default: false } },
+  });
+  if (!values.tasks || !values.id || !values.results) throw new Error("usage: --tasks <file> --id <instance_id> --results <dir> [--mutants]");
   const task = findTask(readTasks(values.tasks), values.id);
   const runDir = join(values.results, task.instance_id);
   const patchPath = join(runDir, "writer.patch");
@@ -95,16 +109,26 @@ function main() {
     buggy = gradeSide(task, writerPatch, false, join(runDir, "buggy.log"));
     fixed = gradeSide(task, writerPatch, true, join(runDir, "fixed.log"));
   }
+  const final = verdict(writerPatch, task.patch, buggy, fixed);
   const report = {
     instance_id: task.instance_id,
     language: task.language,
-    verdict: verdict(writerPatch, task.patch, buggy, fixed),
+    verdict: final,
     graded_at: new Date().toISOString(),
     buggy,
     fixed,
   };
-  writeFileSync(join(runDir, "report.json"), JSON.stringify(report, null, 2) + "\n");
-  console.log(`${task.instance_id}: ${report.verdict} (buggy ${buggy?.runs ?? "-"}, fixed ${fixed?.runs ?? "-"})`);
+  // The verdict is on disk before any mutant runs; each mutant rewrites the report.
+  const save = (mutation?: object) => writeFileSync(join(runDir, "report.json"), JSON.stringify({ ...report, ...mutation }, null, 2) + "\n");
+  save();
+  const mutation =
+    values.mutants && final === "caught"
+      ? gradeMutants(task.patch, fixed!.rebuild, (m, i) => {
+          const ctr = `step0-mutant-${i + 1}-${task.instance_id}`.toLowerCase();
+          return gradeRun(task, ctr, [["mutant", m.patch], ["writer", writerPatch]], join(runDir, `mutant-${i + 1}.log`));
+        }, save)
+      : null;
+  console.log(`${task.instance_id}: ${final} (buggy ${buggy?.runs ?? "-"}, fixed ${fixed?.runs ?? "-"})${mutation ? `, mutants: ${mutation.mutants.map((m) => m.result).join(" ") || "none"}` : ""}`);
 }
 
 if (import.meta.main) main();
