@@ -8,11 +8,14 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const [wt, goal, model, out, notes] = process.argv.slice(2);
 if (!wt || !goal || !model || !out) throw new Error("usage: review.ts <worktree> <goal> <model> <out.json> [<focus-notes>]");
-const diff = Bun.spawnSync(["git", "diff", "main...HEAD"], { cwd: wt }).stdout.toString();
+// BASE=<commit> reviews one task of a multi-task goal: its commits only, against TASK's criteria.
+const base = process.env.BASE ?? "main";
+const diff = Bun.spawnSync(["git", "diff", process.env.BASE ? `${base}..HEAD` : "main...HEAD"], { cwd: wt }).stdout.toString();
+const where = process.env.TASK ? `goals/${goal}.json under "tasks" → "${process.env.TASK}"` : `goals/${goal}.json`;
 const focus = notes ? `\n${readFileSync(notes, "utf8")}\n` : "";
 const prompt = `You are the diff reviewer for a goal in this repository. You did not write this code. The user will not read the diff: your review replaces theirs, so read every changed line.
 
-Goal file (acceptance criteria) is goals/${goal}.json. The diff against main is below. You may Read, Grep and Glob files in this worktree to check context.
+The acceptance criteria are in ${where}. The diff ${process.env.BASE ? `of this task (from ${base})` : "against main"} is below. You may Read, Grep and Glob files in this worktree to check context.
 
 Report:
 1. Each finding with file:line, a severity — 重要 (blocks the merge: wrong behavior, an unmet acceptance criterion, a missing or vacuous test, a security problem), 细节 (does not block), 既有问题 (pre-existing, not this goal's fault) — and one sentence on why.

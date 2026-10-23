@@ -21,12 +21,16 @@ const settings = {
   ...sandboxSettings(commonDir, home),
   permissions: { deny: [".ssh", ".aws", ".gnupg", ".config/gh", ".netrc"].map((p) => `Read(//${join(home, p).slice(1)}/**)`) },
 };
-const g = JSON.parse(readFileSync(join(wt, "goals", `${goal}.json`), "utf8"));
+// A goal with several tasks keeps them under "tasks"; TASK=<id> picks one (title, acceptance,
+// scope, check), otherwise the goal file itself is the task.
+const goalFile = JSON.parse(readFileSync(join(wt, "goals", `${goal}.json`), "utf8"));
+const g = process.env.TASK ? goalFile.tasks?.[process.env.TASK] : goalFile;
+if (!g) throw new Error(`no task ${process.env.TASK} in goals/${goal}.json`);
 const rework = notes ? `\n\n${readFileSync(notes, "utf8")}` : "";
 // A goal may name its own area and checks; hq/ is the default (tasks 1–5).
 const scope: string = g.scope ?? "hq";
 const check: string = g.check ?? `cd ${scope} && bun test && bunx tsc --noEmit`;
-const prompt = `You are working in ${wt}, a git worktree of this repository on branch goal/${goal}. Implement this goal:
+const prompt = `You are working in ${wt}, a git worktree of this repository on branch goal/${goal}. Implement this ${process.env.TASK ? "task (earlier tasks of the same goal are already committed on this branch)" : "goal"}:
 
 ${g.title}
 
