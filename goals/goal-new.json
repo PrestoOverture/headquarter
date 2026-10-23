@@ -8,5 +8,7 @@
     "End-to-end tests in hq/test with a real git repository cover success and every refusal"
   ],
   "shelved": [],
-  "known_issues": []
+  "known_issues": [
+    "Two concurrent `hq goal new` runs with the same name can both pass the checks; the one whose `git worktree add` fails then rolls back the shared branch and worktree, deleting the other run's goal (Codex P1, round 3). Accepted as a detail on 2026-10-23: single user, no concurrent runs. Fix: roll back only what this run created."
+  ]
 }
