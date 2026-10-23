@@ -23,7 +23,7 @@
 //   hq escape <task> --note <text>
 //   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>]
 
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
 import { git, revParse } from "./git";
@@ -37,8 +37,16 @@ import { install, installed, launcherPath, rollback } from "./versions";
 import { type Filters, filterEvents, parseDate, render, rows, stats, toCsv } from "./stats";
 import { render as renderStatus, status } from "./status";
 
+/** Where approve shows the report and the prompt; tests pass their own so the suite stays quiet. */
+export type Writer = (text: string) => void;
+// Synchronous, so a long report is fully out before the terminal read blocks.
+const writeStderr: Writer = (text) => {
+  const buf = Buffer.from(text);
+  for (let off = 0; off < buf.length; ) off += writeSync(2, buf, off);
+};
+
 /** One line typed on the controlling terminal. An agent's shell has none, so it cannot answer. */
-export function readTerminalLine(prompt: string): string {
+export function readTerminalLine(prompt: string, out: Writer = writeStderr): string {
   const tty = process.env.HQ_TTY ?? "/dev/tty"; // HQ_TTY: tests only
   let fd: number;
   try {
@@ -46,7 +54,7 @@ export function readTerminalLine(prompt: string): string {
   } catch {
     throw new Error("hq approve needs a terminal you type in");
   }
-  process.stderr.write(prompt);
+  out(prompt);
   const buf = Buffer.alloc(1);
   let line = "";
   try {
@@ -62,7 +70,7 @@ export function readTerminalLine(prompt: string): string {
  * from showing you the report to your answer, so time the goal spent waiting for you
  * does not count.
  */
-export function approve(cwd: string, goal: string): string {
+export function approve(cwd: string, goal: string, out: Writer = writeStderr): string {
   if (!validGoal(goal)) throw new Error(`bad goal name ${goal}: lowercase letters, digits and dashes`);
   const head = revParse(goalBranch(goal), cwd);
   if (!head) throw new Error(`no branch ${goalBranch(goal)}`);
@@ -70,10 +78,10 @@ export function approve(cwd: string, goal: string): string {
   const r = readReportMeta(cwd, goal, head);
   if (!r) throw new Error(`no report for ${goalBranch(goal)} at ${head.slice(0, 12)}: run \`hq report ${goal}\` and read it first`);
   if (r.test_code !== 0) throw new Error(`the report for ${head.slice(0, 12)} shows failing tests (exit ${r.test_code}); fix them first`);
-  console.error(readReportMarkdown(cwd, goal, head));
+  out(readReportMarkdown(cwd, goal, head) + "\n");
   const shown = Date.now();
   append(cwd, { type: "report.shown", goal, commit: head });
-  const typed = readTerminalLine(`Approve ${goalBranch(goal)} at ${head.slice(0, 12)}? Type the goal name to approve: `);
+  const typed = readTerminalLine(`Approve ${goalBranch(goal)} at ${head.slice(0, 12)}? Type the goal name to approve: `, out);
   if (typed !== goal) throw new Error("not approved");
   writeApproval(cwd, { goal, branch: goalBranch(goal), commit: head, approved_at: new Date().toISOString() });
   append(cwd, { type: "approve", goal, commit: head, active_s: Math.round((Date.now() - shown) / 1000) });

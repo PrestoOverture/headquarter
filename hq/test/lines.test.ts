@@ -16,6 +16,7 @@ import { render, rows, stats } from "../src/stats";
 const NESTED = process.env.SANDBOX_RUNTIME === "1"; // hq merge runs the tests in srt, which cannot nest
 const withSandbox = test.skipIf(NESTED);
 Object.assign(process.env, { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+const quiet = () => {}; // approve shows the report and the prompt through this
 
 let root: string, repo: string, wt: string;
 
@@ -123,7 +124,7 @@ describe("hq merge", () => {
     writeReport(repo, { goal: "x", commit: head, base: revParse("main", repo)!, trial_merge: head, test_code: 0, generated_at: "now" }, "# report", "ok");
     process.env.HQ_TTY = join(root, "tty");
     writeFileSync(process.env.HQ_TTY, "x\n");
-    approve(repo, "x");
+    approve(repo, "x", quiet);
     return head;
   }
 

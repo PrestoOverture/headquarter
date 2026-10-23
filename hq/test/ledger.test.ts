@@ -11,6 +11,7 @@ import { writeReport } from "../src/report";
 import { render, rows, stats } from "../src/stats";
 
 Object.assign(process.env, { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+const quiet = () => {}; // approve shows the report and the prompt through this
 
 const day = (d: number, h = 0) => new Date(Date.UTC(2026, 9, 1 + d, h)).toISOString();
 const start = (task: string, goal: string, at: string, difficulty: "easy" | "medium" | "hard" = "medium"): Event => ({
@@ -140,7 +141,7 @@ describe("recording", () => {
   test("approve records the report being shown and the active time to the answer", () => {
     const head = revParse("goal/x", repo)!;
     writeReport(repo, { goal: "x", commit: head, base: head, trial_merge: head, test_code: 0, generated_at: "now" }, "# REPORT BODY", "ok");
-    approve(repo, "x");
+    approve(repo, "x", quiet);
     const ev = readEvents(repo);
     expect(ev.map((e) => e.type)).toEqual(["report.shown", "approve"]);
     const a = ev[1]!;

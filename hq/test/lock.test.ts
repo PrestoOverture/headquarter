@@ -28,6 +28,7 @@ const NESTED = process.env.SANDBOX_RUNTIME === "1";
 const withSandbox = test.skipIf(NESTED);
 const ID = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 Object.assign(process.env, ID);
+const quiet = () => {}; // approve shows the report and the prompt through this
 
 let root: string, repo: string, wt: string;
 
@@ -81,7 +82,7 @@ describe("refused", () => {
 
   test("a commit after the approval voids it", () => {
     typeAtTerminal("x");
-    approve(repo, "x");
+    approve(repo, "x", quiet);
     commit(wt, "app.txt", "v3\n", "sneaked in after approval");
     const r = merge(repo, "x");
     expect(!r.ok && r.reason).toContain("new commits void an approval");
@@ -90,7 +91,7 @@ describe("refused", () => {
   withSandbox("tests fail on the merge", () => {
     commit(wt, "app.txt", "BROKEN\n", "breaks the tests");
     typeAtTerminal("x");
-    approve(repo, "x");
+    approve(repo, "x", quiet);
     const main = revParse("main", repo);
     const r = merge(repo, "x");
     expect(!r.ok && r.reason).toContain("tests failed");
@@ -102,15 +103,15 @@ describe("refused", () => {
     commit(wt, ".hq.json", JSON.stringify({ test: "true" }), "weaken the tests");
     commit(wt, "app.txt", "BROKEN\n", "and break the app");
     typeAtTerminal("x");
-    approve(repo, "x");
+    approve(repo, "x", quiet);
     expect(merge(repo, "x").ok).toBe(false);
   });
 
   test("approval needs the goal name typed at a terminal", () => {
     typeAtTerminal("yes");
-    expect(() => approve(repo, "x")).toThrow("not approved");
+    expect(() => approve(repo, "x", quiet)).toThrow("not approved");
     process.env.HQ_TTY = join(root, "no-such-tty");
-    expect(() => approve(repo, "x")).toThrow("needs a terminal");
+    expect(() => approve(repo, "x", quiet)).toThrow("needs a terminal");
     expect(readApproval(repo, "x")).toBeNull();
   });
 });
@@ -149,7 +150,7 @@ withSandbox("approved and green: one merge commit on main, revertible in one com
   commit(wt, "notes.txt", "n\n", "task 2");
   const base = revParse("main", repo)!;
   typeAtTerminal("x");
-  const head = approve(repo, "x");
+  const head = approve(repo, "x", quiet);
   const r = merge(repo, "x");
   expect(r.ok).toBe(true);
   if (!r.ok) return;

@@ -30,7 +30,7 @@ export function readConfig(cwd: string): Config {
 }
 
 export type Trial =
-  | { ok: true; base: string; merged: string; testCode: number; testOutput: string }
+  | { ok: true; base: string; merged: string; testCode: number; testOutput: string; testOut: string; testErr: string }
   | { ok: false; reason: string };
 
 /**
@@ -48,7 +48,7 @@ export function trialMerge<T>(cwd: string, goal: string, head: string, then: (t:
     if (m.code !== 0) return then({ ok: false, reason: `goal ${goal} does not merge cleanly into ${MAIN}:\n${(m.out + m.err).trim()}` });
     const merged = git(["rev-parse", "HEAD"], scratch);
     const t = sandboxed(config.test, scratch, { writable: [scratch], commonDir: commonDir(cwd) });
-    return then({ ok: true, base, merged, testCode: t.code, testOutput: t.out + t.err });
+    return then({ ok: true, base, merged, testCode: t.code, testOutput: t.out + t.err, testOut: t.out, testErr: t.err });
   } finally {
     run(["git", "worktree", "remove", "--force", scratch], cwd);
     rmSync(scratch, { recursive: true, force: true });

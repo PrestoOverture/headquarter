@@ -1,0 +1,12 @@
+{
+  "title": "Readable test output in goal reports",
+  "acceptance": [
+    "In the report markdown's test-output block, ANSI escape sequences (CSI sequences such as colors, cursor moves and erase-in-line, and OSC sequences) are removed, and every carriage return is treated as a line break (a CRLF pair is one line break), so every printed segment appears on its own line and nothing a test printed is hidden; progress bars show as several lines (changed 2026-10-23 by the user: terminal emulation kept dropping visible text)",
+    "Nothing else is removed, reordered or rewritten in that block: no line is dropped because of what it says (the report pastes the test output, not a verdict, D31); the saved .test.log keeps the raw output byte for byte",
+    "hq's own test suite no longer prints report bodies or `Type the goal name to approve` prompts when it calls approve(): approve() writes what it shows through a writer that defaults to stderr and that tests can replace; the CLI still prints the report and the prompt to stderr exactly as before",
+    "`cd hq && bun test` output contains no `Type the goal name to approve` line and no `# report` / `# REPORT BODY` line",
+    "Tests in hq/test cover: colored and cursor-moving output, OSC sequences, \\r progress lines, text that merely looks like a prompt staying in the block, and the raw log staying unchanged"
+  ],
+  "shelved": [],
+  "known_issues": []
+}

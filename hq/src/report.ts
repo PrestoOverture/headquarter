@@ -113,6 +113,20 @@ export function newKinds(cwd: string, added: string[]): string[] {
   return [...out];
 }
 
+// CSI: ESC [ parameter bytes, intermediate bytes, final byte. OSC: ESC ] text, ended by BEL or ESC \.
+const ESCAPE = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b\r\n]*(?:\x07|\x1b\\)/g;
+
+/** Test output with escape sequences gone and every \r (or \r\n) a line break, so nothing printed is overwritten or hidden. */
+export function cleanTerminal(text: string): string {
+  return text.replace(ESCAPE, "").replace(/\r\n?/g, "\n");
+}
+
+/** Cleans each stream on its own and puts a line break between them when stdout does not end with one. */
+function cleanStreams(out: string, err: string): string {
+  const o = cleanTerminal(out);
+  return o && err && !o.endsWith("\n") ? `${o}\n${cleanTerminal(err)}` : o + cleanTerminal(err);
+}
+
 function tail(text: string, n: number): { text: string; cut: number } {
   const lines = text.trimEnd().split("\n");
   return lines.length <= n ? { text: lines.join("\n"), cut: 0 } : { text: lines.slice(-n).join("\n"), cut: lines.length - n };
@@ -127,7 +141,8 @@ export function renderReport(r: {
   tasks: string[];
   testCommand: string;
   testCode: number;
-  testOutput: string;
+  testOut: string;
+  testErr: string;
   logPath: string;
   sensitive: string[];
   deps: string[];
@@ -136,7 +151,7 @@ export function renderReport(r: {
   knownIssues: string[];
 }): string {
   const list = (items: string[], empty: string) => (items.length ? items.map((i) => `- ${i}`).join("\n") : `- ${empty}`);
-  const t = tail(r.testOutput, TEST_TAIL_LINES);
+  const t = tail(cleanStreams(r.testOut, r.testErr), TEST_TAIL_LINES);
   return [
     `# 目标报告：${r.goal}${r.title ? `：${r.title}` : ""}`,
     "",
@@ -210,7 +225,7 @@ export function report(cwd: string, goal: string): { path: string; meta: ReportM
     const logPath = join(reportsDir(cwd), `${goal}-${head.slice(0, 12)}.test.log`);
     const markdown = renderReport({
       goal, head, base: t.base, trialMerge: t.merged, title: goalFile.title, tasks,
-      testCommand: config.test, testCode: t.testCode, testOutput: t.testOutput, logPath,
+      testCommand: config.test, testCode: t.testCode, testOut: t.testOut, testErr: t.testErr, logPath,
       sensitive: sensitiveHits(paths, config.sensitive ?? DEFAULT_SENSITIVE),
       deps, kinds: newKinds(cwd, files.filter((f) => f.status === "A").map((f) => f.path)),
       shelved: goalFile.shelved ?? [], knownIssues: goalFile.known_issues ?? [],
