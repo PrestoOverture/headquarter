@@ -1,6 +1,13 @@
 {
   "title": "hq stats: filter by goal or time, export CSV",
-  "acceptance": [],
+  "acceptance": [
+    "`hq stats --goal <name>` (repeatable) keeps only the tasks of those goals, and only the goal-level events (report shown, approve, merge, escalate) of those goals",
+    "`hq stats --since <date> --until <date>` (ISO 8601 date or date-time, either bound optional, since inclusive, until exclusive) keeps only the tasks started in that window, all events of those tasks, and the goal-level events of their goals; a date that does not parse is refused with a non-zero exit",
+    "Filters combine with each other and with every output: the default table, --json, --tasks and the new --csv; the default table's heading names the filters applied, and the metrics are computed over the filtered tasks only, with their denominators",
+    "`hq stats --csv` prints a header and one row per task: task, goal, title, difficulty, model, status, started_at, merged_at, lines, cost_usd, the pass and fail counts of each gate, escaped; fields are quoted per RFC 4180 so commas, quotes and newlines in titles survive",
+    "When no task matches, the table says so and --csv prints only the header; exit 0",
+    "Tests in hq/test with a temporary HQ_HOME cover each filter, their combination, the date refusal, CSV quoting, and the no-match case"
+  ],
   "shelved": [],
   "known_issues": []
 }
