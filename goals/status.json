@@ -1,0 +1,13 @@
+{
+  "title": "hq status: where every goal stands",
+  "acceptance": [
+    "`hq status` lists every goal branch goal/<name> in the repository: the title from goals/<name>.json at the branch head (or the name if missing), the short head commit and its subject, commits ahead of and behind main, and the worktree path if the branch is checked out somewhere",
+    "For each goal it shows the report state for the branch head: none, green, red (failing tests), or stale (a report exists only for an older commit); and the approval state: none, approved (for the head), or void (approved commit is not the head)",
+    "For each goal it lists the open tasks from the ledger (started on that goal, not shelved, goal not merged since they started) with each gate's latest result",
+    "`hq status --json` prints the same information as JSON; with no goal branches it prints that there are no goals and exits 0",
+    "It is read-only: it changes no refs, no files in the repository and nothing under $HQ_HOME",
+    "End-to-end tests in hq/test with a real git repository and a temporary HQ_HOME cover every report state, every approval state, open tasks, --json, no goals, and that nothing changes"
+  ],
+  "shelved": [],
+  "known_issues": []
+}

@@ -5,7 +5,7 @@
 // Reports live in $HQ_HOME/reports, keyed by the goal commit they describe; hq approve
 // refuses a commit that has no green report.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { goalBranch, hqHome, MAIN, repoId } from "./approval";
 import { git, revParse, run } from "./git";
@@ -35,6 +35,16 @@ export function readReportMarkdown(cwd: string, goal: string, commit: string): s
 export function readReportMeta(cwd: string, goal: string, commit: string): ReportMeta | null {
   const p = metaPath(cwd, goal, commit);
   return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null;
+}
+
+/** Every stored report for a goal, whatever commit it describes (tells a stale report from none). */
+export function readReportMetas(cwd: string, goal: string): ReportMeta[] {
+  const dir = reportsDir(cwd);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f): ReportMeta => JSON.parse(readFileSync(join(dir, f), "utf8")))
+    .filter((m) => m.goal === goal);
 }
 
 export function writeReport(cwd: string, meta: ReportMeta, markdown: string, testOutput: string): string {
