@@ -29,6 +29,55 @@ export type TaskRow = {
   escape_window_open: boolean;
 };
 
+export type Filters = { goals?: string[]; since?: Date; until?: Date };
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/** An ISO 8601 date or date-time; with no zone it is UTC, like the ledger's own stamps. */
+export function parseDate(text: string, flag: string): Date {
+  const m = ISO_DATE.exec(text);
+  let t = NaN;
+  if (m) {
+    const [y, mo, d, h, mi, sec] = [1, 2, 3, 4, 5, 6].map((i) => Number(m[i] ?? 0));
+    const valid = mo! >= 1 && mo! <= 12 && d! >= 1 && d! <= new Date(Date.UTC(y!, mo!, 0)).getUTCDate() && h! <= 23 && mi! <= 59 && sec! <= 59;
+    if (valid) t = Date.parse(m[4] && !m[7] ? text + "Z" : text);
+  }
+  if (Number.isNaN(t)) throw new Error(`${flag}: ${JSON.stringify(text)} is not an ISO 8601 date or date-time`);
+  return new Date(t);
+}
+
+/**
+ * Keeps the tasks of the goals (--goal) that started in [since, until), all events of those
+ * tasks, and the goal-level events (report shown, approve, merge, escalate) of their goals.
+ * With a time window the goals are those of the kept tasks; with only --goal, those named.
+ */
+export function filterEvents(events: Event[], f: Filters): Event[] {
+  const timed = f.since !== undefined || f.until !== undefined;
+  if (!f.goals && !timed) return events;
+  const kept = new Map<string, string>(); // task → goal
+  for (const e of events) {
+    if (e.type !== "task.start") continue;
+    const t = Date.parse(e.at);
+    const inGoals = !f.goals || f.goals.includes(e.goal);
+    const inWindow = (!f.since || t >= f.since.getTime()) && (!f.until || t < f.until.getTime());
+    if (inGoals && inWindow) kept.set(e.task, e.goal);
+    else kept.delete(e.task);
+  }
+  const goals = timed ? new Set(kept.values()) : new Set(f.goals);
+  return events.filter((e) => {
+    if (e.type === "report.shown" || e.type === "approve" || e.type === "merge" || e.type === "escalate") return goals.has(e.goal);
+    return kept.has(e.task);
+  });
+}
+
+export function describeFilters(f: Filters): string {
+  const parts = [];
+  if (f.goals) parts.push(`目标 ${f.goals.join("、")}`);
+  if (f.since) parts.push(`自 ${f.since.toISOString()} 起`);
+  if (f.until) parts.push(`至 ${f.until.toISOString()} 前`);
+  return parts.join("；");
+}
+
 export type Ratio = { n: number; of: number; rate: number | null };
 const ratio = (n: number, of: number): Ratio => ({ n, of, rate: of ? n / of : null });
 
@@ -126,9 +175,27 @@ export function stats(events: Event[], now = new Date()) {
 
 const pct = (r: Ratio) => `${r.rate === null ? "—" : `${(r.rate * 100).toFixed(0)}%`}（${r.n}/${r.of}）`;
 
-export function render(s: ReturnType<typeof stats>): string {
+const csvField = (v: string | number) => {
+  const t = String(v);
+  return /[",\r\n]/.test(t) ? '"' + t.replaceAll('"', '""') + '"' : t;
+};
+
+/** RFC 4180: a header and one record per task, each ended by CRLF. */
+export function toCsv(rs: TaskRow[]): string {
+  const header = ["task", "goal", "title", "difficulty", "model", "status", "started_at", "merged_at", "lines", "cost_usd", ...GATES.flatMap((g) => [`${g}_pass`, `${g}_fail`])];
+  const records = rs.map((r) => [
+    r.task, r.goal, r.title, r.difficulty, r.model, r.status, r.started_at, r.merged_at ?? "", r.size?.lines ?? "", r.cost_usd,
+    ...GATES.flatMap((g) => [r.gates[g]?.pass ?? 0, r.gates[g]?.fail ?? 0]),
+  ]);
+  return [header, ...records].map((rec) => rec.map(csvField).join(",") + "\r\n").join("");
+}
+
+export function render(s: ReturnType<typeof stats>, filters: Filters = {}): string {
+  const applied = describeFilters(filters);
+  const heading = `# M0 记账：${s.tasks} 个任务${applied ? `（${applied}）` : ""}`;
+  if (!s.tasks) return `${heading}\n\n没有符合条件的任务。\n`;
   const lines = [
-    `# M0 记账：${s.tasks} 个任务`,
+    heading,
     "",
     s.conclusive ? "" : `**不满 ${MIN_TASKS_FOR_CONCLUSIONS} 个任务，不下结论。**\n`,
     `模型：${s.models.join("、") || "—"}`,

@@ -21,7 +21,7 @@
 //   hq task false-reject <task> <gate> [--note <text>]
 //   hq escalate --goal <goal> --why <text> [--task <task>] [--minutes <n>]
 //   hq escape <task> --note <text>
-//   hq stats [--json | --tasks]
+//   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>]
 
 import { closeSync, openSync, readSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -34,7 +34,7 @@ import { recordLines } from "./lines";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
 import { install, installed, launcherPath, rollback } from "./versions";
-import { render, rows, stats } from "./stats";
+import { type Filters, filterEvents, parseDate, render, rows, stats, toCsv } from "./stats";
 import { render as renderStatus, status } from "./status";
 
 /** One line typed on the controlling terminal. An agent's shell has none, so it cannot answer. */
@@ -157,6 +157,28 @@ export function record(cwd: string, args: string[]): string {
   throw new Error(`unknown task command ${sub}`);
 }
 
+/** `hq stats`: the ledger, filtered by goal and start time, as a table, JSON, one JSON row per task, or CSV. */
+export function statsCommand(cwd: string, args: string[]): string {
+  const { values: o } = parseArgs({
+    args,
+    options: {
+      json: { type: "boolean" }, tasks: { type: "boolean" }, csv: { type: "boolean" },
+      goal: { type: "string", multiple: true }, since: { type: "string" }, until: { type: "string" },
+    },
+  });
+  if ([o.json, o.tasks, o.csv].filter(Boolean).length > 1) throw new Error("use only one of --json, --tasks, --csv");
+  const filters: Filters = {
+    goals: o.goal,
+    since: o.since === undefined ? undefined : parseDate(o.since, "--since"),
+    until: o.until === undefined ? undefined : parseDate(o.until, "--until"),
+  };
+  const events = filterEvents(readEvents(cwd), filters);
+  if (o.csv) return toCsv(rows(events));
+  if (o.tasks) return rows(events).map((r) => JSON.stringify(r)).join("\n");
+  if (o.json) return JSON.stringify(stats(events), null, 2);
+  return render(stats(events), filters);
+}
+
 async function main(argv: string[]): Promise<number> {
   const [cmd, goal] = argv;
   const cwd = process.cwd();
@@ -219,10 +241,8 @@ async function main(argv: string[]): Promise<number> {
     }
     if (cmd === "guard") return await guard(cwd);
     if (cmd === "stats") {
-      const events = readEvents(cwd);
-      if (argv.includes("--tasks")) for (const r of rows(events)) console.log(JSON.stringify(r));
-      else if (argv.includes("--json")) console.log(JSON.stringify(stats(events), null, 2));
-      else console.log(render(stats(events)));
+      const out = statsCommand(cwd, argv.slice(1));
+      if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
       return 0;
     }
     if (cmd === "task" || cmd === "escalate" || cmd === "escape") {
