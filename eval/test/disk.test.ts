@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { check, compressedBytes, EXTRACT_FACTOR, excludedReport, type Manifest, platformDigest, repository } from "../src/disk";
+import { cachedLocally, check, compressedBytes, EXTRACT_FACTOR, excludedForDisk, excludedReport, type Manifest, platformDigest, repository } from "../src/disk";
 import { markdown, summarize } from "../src/summarize";
 
 const GB = 1e9;
@@ -46,6 +46,22 @@ describe("fit decision", () => {
   test("the runner is recorded when known", () => {
     expect(check(1, 1, "ubuntu-latest").check.runner).toBe("ubuntu-latest");
     expect("runner" in check(1, 1).check).toBe(false);
+  });
+});
+
+describe("local image cache", () => {
+  const probes = (cached: boolean) => ({ cached: () => cached, size: () => 30 * GB, free: () => 40 * GB });
+  test("an image already present is never excluded", () => {
+    expect(excludedForDisk("img:t", "linux/amd64", "ubuntu-latest", probes(true))).toBeNull();
+  });
+  test("an absent image is checked as before", () => {
+    expect(excludedForDisk("img:t", "linux/amd64", "ubuntu-latest", probes(false))).toMatchObject({ compressed_bytes: 30 * GB, needed_bytes: 75 * GB, free_bytes: 40 * GB });
+  });
+  test("the presence check asks Docker about the task's platform", () => {
+    const seen: string[][] = [];
+    expect(cachedLocally("img:t", "linux/arm64/v8", (cmd) => (seen.push(cmd), { code: 0 }))).toBe(true);
+    expect(seen).toEqual([["docker", "image", "inspect", "--platform", "linux/arm64/v8", "img:t"]]);
+    expect(cachedLocally("img:t", "linux/arm64/v8", () => ({ code: 1 }))).toBe(false);
   });
 });
 

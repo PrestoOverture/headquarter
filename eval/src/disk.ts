@@ -73,13 +73,33 @@ export function freeBytes(): number | null {
 }
 
 /**
- * Whether the image fits on this runner. Returns the numbers when it does not. When the
- * size or the free space cannot be read, the pull goes ahead: a broken preflight must not
- * exclude a task.
+ * Whether the image for `platform` is already in Docker's local store, so a pull adds
+ * nothing. A partly present image (some layers) counts as absent: the full estimate stays,
+ * which is conservative. An older Docker that rejects `--platform` here also reads as absent.
  */
-export function excludedForDisk(image: string, platform: string, runner = process.env.STEP0_RUNNER): DiskCheck | null {
-  const compressed = registrySize(image, platform);
-  const free = freeBytes();
+export function cachedLocally(image: string, platform: string, exec: (cmd: string[]) => { code: number } = run): boolean {
+  return exec(["docker", "image", "inspect", "--platform", platform, image]).code === 0;
+}
+
+type Probes = { cached: typeof cachedLocally; size: typeof registrySize; free: typeof freeBytes };
+
+/**
+ * Whether the image fits on this runner. Returns the numbers when it does not. An image
+ * already present locally is never excluded. When the size or the free space cannot be
+ * read, the pull goes ahead: a broken preflight must not exclude a task.
+ */
+export function excludedForDisk(
+  image: string,
+  platform: string,
+  runner = process.env.STEP0_RUNNER,
+  probes: Probes = { cached: cachedLocally, size: registrySize, free: freeBytes },
+): DiskCheck | null {
+  if (probes.cached(image, platform)) {
+    console.log("disk preflight skipped: image already present locally");
+    return null;
+  }
+  const compressed = probes.size(image, platform);
+  const free = probes.free();
   if (compressed === null || free === null) {
     console.log(`disk preflight skipped: ${compressed === null ? "image size" : "free space"} unknown`);
     return null;
