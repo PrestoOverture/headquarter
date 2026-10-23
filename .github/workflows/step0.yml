@@ -42,10 +42,11 @@ jobs:
       - id: ids
         working-directory: eval
         env:
-          IDS: ${{ inputs.ids }}
+          STEP0_IDS: ${{ inputs.ids }}
         run: |
-          if [ -z "$IDS" ]; then IDS=$(bun src/tasks.ts ids tasks/tasks.json.gz); fi
-          echo "ids=$IDS" >> "$GITHUB_OUTPUT"
+          ids="$STEP0_IDS"
+          if [ -z "$ids" ]; then ids=$(bun src/tasks.ts ids tasks/tasks.json.gz); fi
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
 
   write:
     needs: plan
@@ -75,10 +76,10 @@ jobs:
         working-directory: eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          ID: ${{ matrix.id }}
-          MODEL: ${{ inputs.model }}
-          PROMPT: ${{ inputs.prompt }}
-        run: bun src/write.ts --tasks tasks/public.json --id "$ID" --out results --model "$MODEL" --prompt "$PROMPT"
+          STEP0_ID: ${{ matrix.id }}
+          STEP0_MODEL: ${{ inputs.model }}
+          STEP0_PROMPT: ${{ inputs.prompt }}
+        run: bun src/write.ts --tasks tasks/public.json --id "$STEP0_ID" --out results --model "$STEP0_MODEL" --prompt "$STEP0_PROMPT"
       - name: Upload writer output
         if: always()
         uses: actions/upload-artifact@v4
@@ -114,21 +115,21 @@ jobs:
         if: inputs.writer_runs != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          RUNS: ${{ inputs.writer_runs }}
-          ID: ${{ matrix.id }}
+          STEP0_RUNS: ${{ inputs.writer_runs }}
+          STEP0_ID: ${{ matrix.id }}
         run: |
-          for run in $RUNS; do
+          for run in $STEP0_RUNS; do
             echo "trying run $run"
-            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-$ID" -D eval/results/; then exit 0; fi
+            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-$STEP0_ID" -D eval/results/; then exit 0; fi
           done
-          echo "no writer output in: $RUNS"; exit 1
+          echo "no writer output in: $STEP0_RUNS"; exit 1
       - name: Grade
         working-directory: eval
         env:
-          ID: ${{ matrix.id }}
+          STEP0_ID: ${{ matrix.id }}
         run: |
-          if [ ! -f "results/$ID/write.json" ]; then echo "no writer output"; exit 1; fi
-          bun src/grade.ts --tasks tasks/tasks.json.gz --id "$ID" --results results
+          if [ ! -f "results/$STEP0_ID/write.json" ]; then echo "no writer output"; exit 1; fi
+          bun src/grade.ts --tasks tasks/tasks.json.gz --id "$STEP0_ID" --results results
       - name: Upload graded run
         if: always()
         uses: actions/upload-artifact@v4

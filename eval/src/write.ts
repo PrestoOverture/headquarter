@@ -64,10 +64,17 @@ function prepareWorkspace(task: PublicTask, dir: string, image: string, ctr: str
   return { ws, envrun, base };
 }
 
-function agentEnv(home: string, proxyUrl: string): Record<string, string> {
+// The workflow hands its inputs to this process as STEP0_* variables; none may reach the agent.
+export const WORKFLOW_ENV_PREFIX = "STEP0_";
+
+export function agentEnv(home: string, proxyUrl: string, instanceId: string, source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const drop = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]);
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !drop.has(k)) env[k] = v;
+  for (const [k, v] of Object.entries(source)) {
+    // A value that contains the instance id would give away the upstream PR number.
+    if (v === undefined || drop.has(k) || k.startsWith(WORKFLOW_ENV_PREFIX) || v.includes(instanceId)) continue;
+    env[k] = v;
+  }
   mkdirSync(join(home, "gh-empty"), { recursive: true });
   env.GH_CONFIG_DIR = join(home, "gh-empty");
   env.GIT_TERMINAL_PROMPT = "0";
@@ -185,7 +192,7 @@ async function main() {
     const { ws, envrun, base } = prepareWorkspace(task, opaque, alias, ctr);
     const cmd = [...CLAUDE, "--model", model, promptFor(task, ws, envrun, prompt)];
     const logPath = join(runDir, "agent.jsonl");
-    const outcome = await runAgent(cmd, ws, logPath, agentEnv(opaque, proxy.url));
+    const outcome = await runAgent(cmd, ws, logPath, agentEnv(opaque, proxy.url, task.instance_id));
     const log = readFileSync(logPath, "utf8");
     // Not a writer outcome: leave no write.json so the task can be rerun.
     if (log.includes('"error":"authentication_failed"')) throw new Error("claude could not authenticate");
