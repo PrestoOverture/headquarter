@@ -19,8 +19,13 @@ const CMD_TIMEOUT_MS = 30 * 60 * 1000;
 const REBUILD_TIMEOUT_MS = 90 * 60 * 1000; // a full duckdb rebuild after the gold patch took over 30 minutes
 const SCRIPT_TIMEOUT_S = 25 * 60; // the prompt promises 20 minutes
 
+// NuGet's vulnerability audit reads advisories published after the dataset was built and
+// turns them into restore errors (wolverine: NU1902), so the task's own rebuild fails.
+// MSBuild reads environment variables as properties; this is a no-op for other projects.
+const GRADE_ENV = ["-e", "NuGetAudit=false"];
+
 function exec(ctr: string, cmd: string, input?: string, timeoutMs = CMD_TIMEOUT_MS) {
-  return run(["docker", "exec", "-i", "-w", "/testbed", ctr, "bash", "-c", cmd], { input, timeoutMs });
+  return run(["docker", "exec", "-i", ...GRADE_ENV, "-w", "/testbed", ctr, "bash", "-c", cmd], { input, timeoutMs });
 }
 
 /** git apply, falling back to a fuzzy `patch` like the SWE-bench harness. */
