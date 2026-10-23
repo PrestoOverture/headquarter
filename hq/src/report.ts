@@ -7,6 +7,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
+import { type Clues, riskClues } from "./clues";
 import { goalBranch, hqHome, MAIN, repoId } from "./approval";
 import { git, revParse, run } from "./git";
 import { readConfig, trialMerge } from "./merge";
@@ -147,10 +148,13 @@ export function renderReport(r: {
   sensitive: string[];
   deps: string[];
   kinds: string[];
+  newImports: Clues;
+  newCalls: Clues;
   shelved: { task: string; why: string }[];
   knownIssues: string[];
 }): string {
   const list = (items: string[], empty: string) => (items.length ? items.map((i) => `- ${i}`).join("\n") : `- ${empty}`);
+  const clues = (c: Clues) => ["源码：", "", list(c.source, "没有"), "", "测试文件：", "", list(c.test, "没有")].join("\n");
   const t = tail(cleanStreams(r.testOut, r.testErr), TEST_TAIL_LINES);
   return [
     `# 目标报告：${r.goal}${r.title ? `：${r.title}` : ""}`,
@@ -184,6 +188,14 @@ export function renderReport(r: {
     "",
     list(r.kinds, "没有"),
     "",
+    "新 import（goal 里新增、main 上任何文件都没 import 过的模块；位置是 goal 版本的文件和行；只是线索，会漏也会错，要你看 diff）：",
+    "",
+    clues(r.newImports),
+    "",
+    "新进程或网络调用（新增行里的 child_process、Bun.spawn、exec/spawn、fetch、http(s).request、net.connect、curl、wget 等；移动的行不算；只是线索，会漏也会错，要你看 diff）：",
+    "",
+    clues(r.newCalls),
+    "",
     "考场路径（D30）：M0 没有考场，不适用。",
     "",
     "## 怎么撤回",
@@ -216,6 +228,7 @@ export function report(cwd: string, goal: string): { path: string; meta: ReportM
     else if (MANIFESTS.test(p)) deps.push(`${p}: 依赖清单变了，看 diff`);
   }
   const goalFile = (showJson(cwd, head, `goals/${goal}.json`) ?? {}) as GoalFile;
+  const { imports: newImports, calls: newCalls } = riskClues(cwd, head);
   const tasks = git(["log", "--first-parent", "--reverse", "--format=%h %s", `${MAIN}..${head}`], cwd).split("\n").filter(Boolean);
   return trialMerge(cwd, goal, head, (t) => {
     if (!t.ok) throw new Error(t.reason);
@@ -228,7 +241,7 @@ export function report(cwd: string, goal: string): { path: string; meta: ReportM
       testCommand: config.test, testCode: t.testCode, testOut: t.testOut, testErr: t.testErr, logPath,
       sensitive: sensitiveHits(paths, config.sensitive ?? DEFAULT_SENSITIVE),
       deps, kinds: newKinds(cwd, files.filter((f) => f.status === "A").map((f) => f.path)),
-      shelved: goalFile.shelved ?? [], knownIssues: goalFile.known_issues ?? [],
+      newImports, newCalls, shelved: goalFile.shelved ?? [], knownIssues: goalFile.known_issues ?? [],
     });
     return { path: writeReport(cwd, meta, markdown, t.testOutput), meta, markdown };
   });

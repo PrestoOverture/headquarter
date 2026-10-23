@@ -14,6 +14,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
   src/status.ts       总览（`hq status`）：每个目标分支的头、领先落后、报告与批准状态、未完成任务；只读
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
+  src/clues.ts        报告风险栏的线索：goal 新增行里 main 没 import 过的模块、新的进程或网络调用，源码和测试文件分开；正则，只是线索
   src/ledger.ts       记账（M0.3）：~/.hq/ledger/<仓库>/events.jsonl，只追加
   src/lines.ts        任务大小（200 行规则）：基线到结束 commit 的增删行数，只算文本文件，不算 goals/*.json 和锁文件
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
