@@ -2,7 +2,7 @@
 // executable first on PATH that logs how it was called and prints a canned review (no network).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, run } from "../src/git";
@@ -24,6 +24,10 @@ function fakeCodex(body: string, code = 0) {
   writeFileSync(join(root, "bin/codex"), script);
   chmodSync(join(root, "bin/codex"), 0o755);
 }
+
+/** The saved review files of this repo, newest last. */
+const saved = () => (existsSync(reviewsDir(repo)) ? readdirSync(reviewsDir(repo)).sort().map((f) => join(reviewsDir(repo), f)) : []);
+const stem = () => `g-${head.slice(0, 12)}-t1-`;
 
 const gates = () => readEvents(repo).filter((e) => e.type === "task.gate");
 
@@ -61,7 +65,7 @@ describe("parsing", () => {
     ].join("\n");
     expect(parseFindings(out)).toEqual([
       { priority: 0, title: "Drops all data", file: "src/db.ts", line: 10 },
-      { priority: 1, title: "Race in startup", file: "src/boot.ts", line: 7 },
+      { priority: 1, title: "Race in startup", file: "src/boot.ts", line: 7, endLine: 20 },
       { priority: 2, title: "Missing check", file: "/abs/path/a.ts", line: 3 },
       { priority: 3, title: "Naming", file: "x.ts", line: 1 },
     ]);
@@ -70,6 +74,34 @@ describe("parsing", () => {
   test("a finding without a location, other bullets ignored, a list printed twice counted once", () => {
     const list = "- [P2] No location here\n- not a finding\n  - [P5] bad priority — a.ts:1\n- [P1] Real — a.ts:2";
     expect(parseFindings(`${list}\ncodex\n${list}`)).toEqual([{ priority: 2, title: "No location here" }, { priority: 1, title: "Real", file: "a.ts", line: 2 }]);
+  });
+
+  test("a real Codex review with a line range", () => {
+    const out = readFileSync(join(import.meta.dir, "fixtures/codex-range.txt"), "utf8");
+    expect(parseFindings(out)).toEqual([
+      {
+        priority: 2,
+        title: "Roll back partial failures from worktree creation",
+        file: "/Users/kwang/projects/headquarter.goals/goal-new/hq/src/goal.ts",
+        line: 23,
+        endLine: 24,
+      },
+    ]);
+  });
+
+  test("only the final review counts, not a [P1] line in the transcript before it", () => {
+    const out = "reading the file:\n- [P1] quoted from a source file — a.ts:1\ncodex\nsome prose\n- [P3] Real — b.ts:2\n";
+    expect(parseFindings(out)).toEqual([{ priority: 3, title: "Real", file: "b.ts", line: 2 }]);
+    expect(verdict(parseFindings(out))).toBe("pass");
+    expect(parseFindings("codex\nfirst\ncodex\n- [P0] Only after the last marker — c.ts:3")).toEqual([{ priority: 0, title: "Only after the last marker", file: "c.ts", line: 3 }]);
+  });
+
+  test("a finding whose location does not parse is kept, with no file", () => {
+    expect(parseFindings("- [P1] Broken thing — somewhere in the parser\n- [P0] Spaces — /a b/c.ts:4")).toEqual([
+      { priority: 1, title: "Broken thing — somewhere in the parser" },
+      { priority: 0, title: "Spaces — /a b/c.ts:4" },
+    ]);
+    expect(verdict(parseFindings("- [P1] Broken thing — somewhere"))).toBe("fail");
   });
 
   test("P0 and P1 fail, P2 and P3 and nothing pass", () => {
@@ -87,7 +119,8 @@ describe("hq review", () => {
     const r = hq("review", "g", "--task", "t1", "--claimed-done");
     expect(r.code).toBe(1);
     expect(r.out).toContain(body.trimEnd());
-    const path = join(reviewsDir(repo), `g-${head.slice(0, 12)}-t1.txt`);
+    const [path] = saved() as [string];
+    expect(path).toMatch(new RegExp(`${stem()}\\d+\\.txt$`));
     expect(readFileSync(path, "utf8")).toBe(body);
     const [cwd, review, flag, branch, sha] = readFileSync(join(root, "codex.log"), "utf8").trim().split(" ");
     expect([cwd, review, flag, sha]).toEqual([wt, "review", "--base", base]);
@@ -115,12 +148,26 @@ describe("hq review", () => {
     expect(gates()).toMatchObject([{ result: "pass", note: expect.stringContaining("no findings") }]);
   });
 
+  test("every invocation keeps its own file and the recorded note names the one it ran", () => {
+    fakeCodex("- [P3] First — a.ts:1\n");
+    hq("review", "g", "--task", "t1");
+    fakeCodex("- [P2] Second — a.ts:2\n");
+    hq("review", "g", "--task", "t1");
+    const files = saved();
+    expect(files).toHaveLength(2);
+    expect(readFileSync(files[0]!, "utf8")).toContain("First");
+    expect(readFileSync(files[1]!, "utf8")).toContain("Second");
+    const notes = gates().map((g) => (g as { note: string }).note);
+    expect(notes[0]).toContain(files[0]!);
+    expect(notes[1]).toContain(files[1]!);
+  });
+
   test("--no-record saves and prints but records nothing", () => {
     fakeCodex("- [P0] Bad — a.ts:1\n");
     const r = hq("review", "g", "--task", "t1", "--no-record");
     expect(r.code).toBe(1);
     expect(r.out).toContain("not recorded");
-    expect(existsSync(join(reviewsDir(repo), `g-${head.slice(0, 12)}-t1.txt`))).toBe(true);
+    expect(saved()).toHaveLength(1);
     expect(gates()).toEqual([]);
   });
 

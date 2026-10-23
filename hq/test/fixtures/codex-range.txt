@@ -1,0 +1,16 @@
+/private/var/folders/py/fgn4y69d7n33qyc1rzh_2nr80000gn/T/tmp.KWBwoR8oHd/r 884f240 [main]
+/private/var/folders/py/fgn4y69d7n33qyc1rzh_2nr80000gn/T/tmp.KWBwoR8oHd/w 884f240 [goal/test]
+
+codex
+The 11 new tests pass, but worktree creation can fail after creating persistent resources, bypassing the rollback logic and blocking retries.
+
+Review comment:
+
+- [P2] Roll back partial failures from worktree creation — /Users/kwang/projects/headquarter.goals/goal-new/hq/src/goal.ts:23-24
+  If a repository's `post-checkout` hook exits nonzero, `git worktree add` returns failure after creating the branch and registering the worktree. Because this call is outside the cleanup block, the command leaves an incomplete goal without its initial goal-file commit, and retrying fails because the branch already exists. Include worktree creation in failure handling and clean up any resources it created.
+The 11 new tests pass, but worktree creation can fail after creating persistent resources, bypassing the rollback logic and blocking retries.
+
+Review comment:
+
+- [P2] Roll back partial failures from worktree creation — /Users/kwang/projects/headquarter.goals/goal-new/hq/src/goal.ts:23-24
+  If a repository's `post-checkout` hook exits nonzero, `git worktree add` returns failure after creating the branch and registering the worktree. Because this call is outside the cleanup block, the command leaves an incomplete goal without its initial goal-file commit, and retrying fails because the branch already exists. Include worktree creation in failure handling and clean up any resources it created.
