@@ -2,6 +2,13 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-10-23 M0.1：合入锁
+
+- 做了什么：`hq/`（TS/Bun）。`hq approve <目标>` 从终端读你敲的目标名，把批准绑定到 `goal/<目标>` 当前的 commit，记录写进 `~/.hq/approvals/`。`hq merge <目标>` 核对批准、在最新 main 上建 `--no-ff` 合并提交、在 srt 沙箱里跑 `.hq.json`（从 main 读）的全量测试、main 没动过才移过去，输出 `git revert -m 1` 命令。`hq install-hook` 装 reference-transaction 钩子：main 只能移到已批准目标的合并提交。
+- 结果 / 数据：9 个端到端测试全过（假执行者 + 真 git、真 worktree、真 srt）：未批准、批准后新提交、测试不过、目标改弱测试命令、终端外批准、沙箱里伪造批准或改 main、沙箱外改 main 都被拒；合法合入只有一个合并提交，一条 revert 能撤回。本仓库全量测试在 srt 里能跑通。
+- 遇到的问题：Bun 子进程默认不继承运行中改过的 `process.env`，钩子拿不到 `HQ_HOME`；srt 把 `$TMPDIR` 设成 `/tmp/claude` 却不创建；srt 里起不了 srt，嵌套时有两个测试会「碰巧」通过，改成在沙箱运行里显式跳过（ADR-4）。
+- 下一步：决定是否把守卫钩子装到本仓库；M0.2 目标报告。
+
 ## 2026-10-23 M0.0：沙箱前置验证通过
 
 - 做了什么：M0 计划写进 roadmap（M0 实施计划）。写了 `scripts/sandbox/check.ts` 和 `probe.sh`：在 linked worktree 里用 `claude -p`（Haiku）加沙箱设置跑探针，从工具结果里读结论，再从沙箱外核对 main、hooks、config。
