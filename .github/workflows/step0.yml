@@ -17,7 +17,9 @@ on:
         description: writer model (Sonnet saves quota; Opus for the real measurement)
         default: claude-sonnet-5-5
       prompt:
-        description: writer prompt version, v1 or v2 (eval/src/writer_prompt_v2.md)
+        description: writer prompt version (v2 is eval/src/writer_prompt_v2.md)
+        type: choice
+        options: [v1, v2]
         default: v1
       writer_runs:
         description: grade only, using writer output from these run ids (space-separated)
@@ -73,7 +75,10 @@ jobs:
         working-directory: eval
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: bun src/write.ts --tasks tasks/public.json --id "${{ matrix.id }}" --out results --model "${{ inputs.model }}" --prompt "${{ inputs.prompt }}"
+          ID: ${{ matrix.id }}
+          MODEL: ${{ inputs.model }}
+          PROMPT: ${{ inputs.prompt }}
+        run: bun src/write.ts --tasks tasks/public.json --id "$ID" --out results --model "$MODEL" --prompt "$PROMPT"
       - name: Upload writer output
         if: always()
         uses: actions/upload-artifact@v4
@@ -110,17 +115,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUNS: ${{ inputs.writer_runs }}
+          ID: ${{ matrix.id }}
         run: |
           for run in $RUNS; do
             echo "trying run $run"
-            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-${{ matrix.id }}" -D eval/results/; then exit 0; fi
+            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n "write-$ID" -D eval/results/; then exit 0; fi
           done
           echo "no writer output in: $RUNS"; exit 1
       - name: Grade
         working-directory: eval
+        env:
+          ID: ${{ matrix.id }}
         run: |
-          if [ ! -f "results/${{ matrix.id }}/write.json" ]; then echo "no writer output"; exit 1; fi
-          bun src/grade.ts --tasks tasks/tasks.json.gz --id "${{ matrix.id }}" --results results
+          if [ ! -f "results/$ID/write.json" ]; then echo "no writer output"; exit 1; fi
+          bun src/grade.ts --tasks tasks/tasks.json.gz --id "$ID" --results results
       - name: Upload graded run
         if: always()
         uses: actions/upload-artifact@v4

@@ -201,6 +201,30 @@ describe("writer prompt versions", () => {
   test("the step0 workflow passes a prompt input, default v1, to write.ts", () => {
     const wf = readFileSync(new URL("../../.github/workflows/step0.yml", import.meta.url), "utf8");
     expect(wf).toMatch(/\n {6}prompt:\n(?: {8}.*\n)*? {8}default: v1\n/);
-    expect(wf).toContain('--prompt "${{ inputs.prompt }}"');
+    expect(wf).toMatch(/\n {6}prompt:\n(?: {8}.*\n)*? {8}type: choice\n(?: {8}.*\n)*? {8}options: \[v1, v2\]\n/);
+    const step = wf.split("      - name: Write tests\n")[1].split("\n      - ")[0];
+    expect(step).toContain("PROMPT: ${{ inputs.prompt }}");
+    expect(step).toContain("MODEL: ${{ inputs.model }}");
+    expect(step).toContain("ID: ${{ matrix.id }}");
+    expect(step).toContain('--id "$ID"');
+    expect(step).toContain('--model "$MODEL"');
+    expect(step).toContain('--prompt "$PROMPT"');
+  });
+  test("no run script in the step0 workflow interpolates inputs or matrix values", () => {
+    const wf = readFileSync(new URL("../../.github/workflows/step0.yml", import.meta.url), "utf8");
+    const lines = wf.split("\n");
+    const offenders: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^( *)(?:- )?run:(.*)$/);
+      if (!m) continue;
+      const indent = m[1].length;
+      const script = [m[2]];
+      if (/^\s*[|>][-+]?\s*$/.test(m[2])) {
+        script.length = 0;
+        for (let j = i + 1; j < lines.length && (lines[j].trim() === "" || lines[j].search(/\S/) > indent); j++) script.push(lines[j]);
+      }
+      for (const l of script) if (/\$\{\{\s*(inputs|matrix)\./.test(l)) offenders.push(l.trim());
+    }
+    expect(offenders).toEqual([]);
   });
 });
