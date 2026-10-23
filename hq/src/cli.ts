@@ -11,7 +11,7 @@
 //   hq guard              (called by the hook)
 //
 //   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>]
-//   hq task gate <task> <self_test|full_tests|codex_review|human_diff> <pass|fail> [--claimed-done] [--note <text>]
+//   hq task gate <task> <self_test|full_tests|codex_review|claude_diff> <pass|fail> [--claimed-done] [--note <text>]
 //   hq task cost <task> <usd> [--model <id>]
 //   hq task shelve <task> --why <text>
 //   hq task cause <task> <cheat|misunderstanding|other> [--note <text>]

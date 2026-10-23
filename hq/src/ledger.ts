@@ -8,7 +8,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hqHome, repoId } from "./approval";
 
-export const GATES = ["self_test", "full_tests", "codex_review", "human_diff"] as const;
+// claude_diff: a fresh Claude session, not the author, reads the diff (you do not; 2026-10-23).
+export const GATES = ["self_test", "full_tests", "codex_review", "claude_diff"] as const;
 export type Gate = (typeof GATES)[number];
 export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
 export const CAUSES = ["cheat", "misunderstanding", "other"] as const;

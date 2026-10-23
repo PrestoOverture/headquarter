@@ -66,7 +66,7 @@ describe("stats", () => {
     expect(s.models).toEqual(["claude-sonnet-5-5"]);
     expect(s.caught_by_gate.codex_review).toEqual({ n: 1, of: 2, rate: 0.5 });
     expect(s.caught_by_gate.full_tests).toEqual({ n: 0, of: 1, rate: 0 }); // failed, but not after claiming done
-    expect(s.caught_by_gate.human_diff).toEqual({ n: 0, of: 0, rate: null });
+    expect(s.caught_by_gate.claude_diff).toEqual({ n: 0, of: 0, rate: null });
     expect(s.escalation_rate).toEqual({ n: 1, of: 5, rate: 0.2 });
     expect(s.escape_rate).toEqual({ n: 1, of: 3, rate: 1 / 3 });
     expect(s.escape_windows_open).toBe(0);
