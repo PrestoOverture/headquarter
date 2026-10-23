@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // hq — M0 merge lock (roadmap M0.1, D29).
 //
+//   hq report <goal>      the five-column goal report (D31) for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: bind approval to goal/<goal>'s current commit
 //   hq merge <goal>       merge an approved goal into main after the full tests pass
 //   hq install-hook       install the main-ref guard into this repository's git hooks
@@ -11,6 +12,7 @@ import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
 import { git, revParse } from "./git";
 import { guard, installHook } from "./guard";
 import { merge } from "./merge";
+import { readReportMeta, report } from "./report";
 
 /** One line typed on the controlling terminal. An agent's shell has none, so it cannot answer. */
 export function readTerminalLine(prompt: string): string {
@@ -36,6 +38,10 @@ export function approve(cwd: string, goal: string): string {
   if (!validGoal(goal)) throw new Error(`bad goal name ${goal}: lowercase letters, digits and dashes`);
   const head = revParse(goalBranch(goal), cwd);
   if (!head) throw new Error(`no branch ${goalBranch(goal)}`);
+  // D31: you read the report before you approve; the report must describe this commit.
+  const r = readReportMeta(cwd, goal, head);
+  if (!r) throw new Error(`no report for ${goalBranch(goal)} at ${head.slice(0, 12)}: run \`hq report ${goal}\` and read it first`);
+  if (r.test_code !== 0) throw new Error(`the report for ${head.slice(0, 12)} shows failing tests (exit ${r.test_code}); fix them first`);
   console.error(git(["log", "--oneline", `${MAIN}..${head}`], cwd) || "(no commits ahead of main)");
   console.error(git(["diff", "--stat", `${MAIN}...${head}`], cwd));
   const typed = readTerminalLine(`Approve ${goalBranch(goal)} at ${head.slice(0, 12)}? Type the goal name to approve: `);
@@ -48,6 +54,12 @@ async function main(argv: string[]): Promise<number> {
   const [cmd, goal] = argv;
   const cwd = process.cwd();
   try {
+    if (cmd === "report" && goal) {
+      const r = report(cwd, goal);
+      console.log(r.markdown);
+      console.error(`report saved to ${r.path}`);
+      return r.meta.test_code === 0 ? 0 : 1;
+    }
     if (cmd === "approve" && goal) {
       const head = approve(cwd, goal);
       console.log(`approved ${goalBranch(goal)} at ${head.slice(0, 12)}; a new commit voids it`);
@@ -72,7 +84,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq approve <goal> | hq merge <goal> | hq install-hook");
+  console.error("usage: hq report <goal> | hq approve <goal> | hq merge <goal> | hq install-hook");
   return 2;
 }
 

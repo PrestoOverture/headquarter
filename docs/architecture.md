@@ -10,13 +10,15 @@
 .hq.json              合入前跑的全量测试命令；hq 从 main 读，目标分支改不了它
 hq/                   合入锁（M0.1）：hq approve / merge / install-hook，git 的 main 守卫钩子
   src/approval.ts     批准记录：~/.hq/approvals/<仓库>/，绑定一个 commit，合入后作废
-  src/merge.ts        在最新 main 上建合并提交、沙箱里跑全量测试、移动 main
+  src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
+  src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
   src/guard.ts        reference-transaction 钩子：main 只能移到已批准目标的合并提交
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令
   test/               假执行者的端到端测试：真 git、真 worktree、真沙箱
 eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、判卷、汇总）
 scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查
 docs/                 设计、路线、历史
+goals/<目标>.json      目标分支上的目标文件：title、shelved（搁置的任务）、known_issues（既有问题）；报告从这里读
 ```
 
 ## 模块与边界
@@ -25,7 +27,8 @@ docs/                 设计、路线、历史
 
 | 模块 | 职责 | 对外接口 | 依赖 |
 | --- | --- | --- | --- |
-| hq 合入锁 | 没有你的批准，main 不动（D29） | `hq approve <目标>`（只认终端输入）、`hq merge <目标>`、`hq install-hook` | git、srt；批准记录在 `$HQ_HOME`（默认 `~/.hq`） |
+| hq 合入锁 | 没有你的批准，main 不动（D29） | `hq approve <目标>`（只认终端输入，要先有这个 commit 的绿色报告）、`hq merge <目标>`、`hq install-hook` | git、srt；批准记录在 `$HQ_HOME`（默认 `~/.hq`） |
+| hq 目标报告 | 批准前读的五栏报告（D31） | `hq report <目标>` | 合并预演、`.hq.json`（`sensitive` 可覆盖默认敏感路径）、`goals/<目标>.json` |
 | main 守卫钩子 | 兜底：不在沙箱里的会话也改不了 main | git 调 `hq guard`；人手动改 main 时设 `HQ_ALLOW_MAIN=1` | hq 的批准记录 |
 | eval | 第 0 步的出题与判卷 | GitHub Actions 的 `step0` workflow | Docker、Claude Code |
 

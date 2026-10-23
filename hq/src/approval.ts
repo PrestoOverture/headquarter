@@ -17,11 +17,14 @@ export function hqHome(): string {
   return process.env.HQ_HOME ?? join(homedir(), ".hq");
 }
 
-/** One approvals dir per repository, keyed by its .git path. */
-export function approvalsDir(cwd: string): string {
+/** Per-repository key for the stores under $HQ_HOME: repo name plus a hash of its .git path. */
+export function repoId(cwd: string): string {
   const dir = commonDir(cwd);
-  const id = `${basename(dir.replace(/\/\.git$/, ""))}-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}`;
-  return join(hqHome(), "approvals", id);
+  return `${basename(dir.replace(/\/\.git$/, ""))}-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}`;
+}
+
+export function approvalsDir(cwd: string): string {
+  return join(hqHome(), "approvals", repoId(cwd));
 }
 
 export function validGoal(goal: string): boolean {

@@ -10,6 +10,7 @@ import { approve } from "../src/cli";
 import { git, revParse, run } from "../src/git";
 import { installHook, refusal } from "../src/guard";
 import { merge } from "../src/merge";
+import { writeReport } from "../src/report";
 import { sandboxed } from "../src/sandbox";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
@@ -34,7 +35,14 @@ function agent(cmd: string) {
   return sandboxed(cmd, wt, { writable: [wt], commonDir: join(repo, ".git") });
 }
 
+/** Stands in for `hq report` (whose trial run needs the sandbox): a green report for goal/x's head. */
+function greenReport() {
+  const head = revParse("goal/x", repo)!;
+  writeReport(repo, { goal: "x", commit: head, base: revParse("main", repo)!, trial_merge: head, test_code: 0, generated_at: "now" }, "# report", "ok");
+}
+
 function typeAtTerminal(text: string) {
+  greenReport();
   const f = join(root, "tty");
   writeFileSync(f, text + "\n");
   process.env.HQ_TTY = f;

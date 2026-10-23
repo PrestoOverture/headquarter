@@ -2,6 +2,12 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-10-23 M0.2：目标报告；守卫钩子装进本仓库
+
+- 做了什么：`hq install-hook` 装进本仓库，直接往 main 提交要带 `HQ_ALLOW_MAIN=1`（你的决定）。`hq report <目标>` 生成五栏：改了什么（目标分支 first-parent 的每个提交一行）、怎么测的（合并预演上沙箱里跑的原始测试输出和退出码，超过 300 行贴尾部、全文存盘）、风险（敏感路径、package.json 依赖增删改、其他依赖清单、新目录和新文件类型）、怎么撤回、没做完的（`goals/<目标>.json` 里的搁置任务和既有问题）。合并预演从 `hq merge` 里抽成 `trialMerge`，两边用同一套。`hq approve` 现在要求这个 commit 有绿色报告；报告存在 `~/.hq/reports`，执行者沙箱写不了。
+- 结果 / 数据：hq 14 个测试全过；本仓库全量测试在 srt 里通过（hq 的 6 个沙箱测试在嵌套时跳过）。
+- 下一步：M0.3 记账。
+
 ## 2026-10-23 M0.1：合入锁
 
 - 做了什么：`hq/`（TS/Bun）。`hq approve <目标>` 从终端读你敲的目标名，把批准绑定到 `goal/<目标>` 当前的 commit，记录写进 `~/.hq/approvals/`。`hq merge <目标>` 核对批准、在最新 main 上建 `--no-ff` 合并提交、在 srt 沙箱里跑 `.hq.json`（从 main 读）的全量测试、main 没动过才移过去，输出 `git revert -m 1` 命令。`hq install-hook` 装 reference-transaction 钩子：main 只能移到已批准目标的合并提交。
