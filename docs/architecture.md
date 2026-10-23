@@ -24,6 +24,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
   src/escape.ts       逃逸候选：近 14 天合入的目标，被之后某个目标的修复提交再次改到（`hq escapes`，合入后也打印）；只建议，不记账
   src/review.ts       Codex 审查作为关卡（`hq review`）：对任务基线跑 `codex review`，解析 P0–P3，P0/P1 不过；全文存 ~/.hq/reviews/<仓库>/
+  src/trace.ts        验收标准的溯源（`hq trace <目标> [--check-with [<命令>]]`）：goals/<目标>.json 顶层 `criteria` 的条目依次是 g1、g2…；任务标准写成 `{"text", "traces": "g1"}`。报告没有 trace 的任务标准、trace 指向不存在的目标标准、没有任务指向的目标标准，有就非零退出；`--check-with` 把每条 trace 的两段文字交给外部命令（默认新的 `claude -p`，在空目录里、只从 stdin 收这两段）答 SERVES 或 DOES-NOT-SERVE，DOES-NOT-SERVE、命令失败、答案不明确都算不过
   src/versions.ts     安装版本（M0.4）：~/.hq/versions/<commit>、current / previous、启动器 ~/.hq/bin/hq
   src/guard.ts        reference-transaction 钩子：main 只能移到已批准目标的合并提交
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令
