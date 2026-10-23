@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeApproval, goalBranch, MAIN, readApproval } from "./approval";
 import { commonDir, git, revParse, run, worktreeOf } from "./git";
+import { append } from "./ledger";
 import { sandboxed } from "./sandbox";
 
 export type Config = { test: string; sensitive?: string[] };
@@ -71,6 +72,7 @@ export function merge(cwd: string, goal: string): MergeResult {
     if (wt) git(["merge", "--ff-only", "-q", merged], wt);
     else git(["update-ref", `refs/heads/${MAIN}`, merged, base], cwd);
     consumeApproval(cwd, goal, merged);
+    append(cwd, { type: "merge", goal, commit: head, merge_commit: merged });
     return { ok: true, mergeCommit: merged, revert: `git revert -m 1 ${merged}`, testOutput };
   });
 }

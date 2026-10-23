@@ -9,6 +9,7 @@ import { approvalsDir, readApproval } from "../src/approval";
 import { approve } from "../src/cli";
 import { git, revParse, run } from "../src/git";
 import { installHook, refusal } from "../src/guard";
+import { readEvents } from "../src/ledger";
 import { merge } from "../src/merge";
 import { writeReport } from "../src/report";
 import { sandboxed } from "../src/sandbox";
@@ -150,6 +151,7 @@ withSandbox("approved and green: one merge commit on main, revertible in one com
   expect(git(["rev-list", "--parents", "-n", "1", r.mergeCommit], repo).split(" ").slice(1)).toEqual([base, head]);
   expect(readFileSync(join(repo, "app.txt"), "utf8")).toBe("v2\n"); // the checked-out main followed
   expect(readApproval(repo, "x")).toBeNull(); // spent
+  expect(readEvents(repo).filter((e) => e.type === "merge")).toMatchObject([{ goal: "x", commit: head, merge_commit: r.mergeCommit }]);
   expect(existsSync(join(approvalsDir(repo), "merged"))).toBe(true);
   run(["bash", "-c", `HQ_ALLOW_MAIN=1 ${r.revert} --no-edit`], repo);
   expect(readFileSync(join(repo, "app.txt"), "utf8")).toBe("v1\n");

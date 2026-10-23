@@ -25,7 +25,12 @@ export function reportsDir(cwd: string): string {
   return join(hqHome(), "reports", repoId(cwd));
 }
 
-const metaPath = (cwd: string, goal: string, commit: string) => join(reportsDir(cwd), `${goal}-${commit.slice(0, 12)}.json`);
+const stemOf = (cwd: string, goal: string, commit: string) => join(reportsDir(cwd), `${goal}-${commit.slice(0, 12)}`);
+const metaPath = (cwd: string, goal: string, commit: string) => `${stemOf(cwd, goal, commit)}.json`;
+
+export function readReportMarkdown(cwd: string, goal: string, commit: string): string {
+  return readFileSync(`${stemOf(cwd, goal, commit)}.md`, "utf8");
+}
 
 export function readReportMeta(cwd: string, goal: string, commit: string): ReportMeta | null {
   const p = metaPath(cwd, goal, commit);
@@ -34,7 +39,7 @@ export function readReportMeta(cwd: string, goal: string, commit: string): Repor
 
 export function writeReport(cwd: string, meta: ReportMeta, markdown: string, testOutput: string): string {
   mkdirSync(reportsDir(cwd), { recursive: true });
-  const stem = join(reportsDir(cwd), `${meta.goal}-${meta.commit.slice(0, 12)}`);
+  const stem = stemOf(cwd, meta.goal, meta.commit);
   writeFileSync(`${stem}.md`, markdown);
   writeFileSync(`${stem}.test.log`, testOutput);
   writeFileSync(`${stem}.json`, JSON.stringify(meta, null, 2) + "\n");

@@ -1,18 +1,31 @@
 #!/usr/bin/env bun
-// hq — M0 merge lock (roadmap M0.1, D29).
+// hq — M0 tooling: merge lock (M0.1, D29), goal report (M0.2, D31), bookkeeping (M0.3).
 //
-//   hq report <goal>      the five-column goal report (D31) for goal/<goal>'s current commit
-//   hq approve <goal>     you, in a terminal: bind approval to goal/<goal>'s current commit
+//   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
+//   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
 //   hq merge <goal>       merge an approved goal into main after the full tests pass
 //   hq install-hook       install the main-ref guard into this repository's git hooks
 //   hq guard              (called by the hook)
+//
+//   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>]
+//   hq task gate <task> <self_test|full_tests|codex_review|human_diff> <pass|fail> [--claimed-done] [--note <text>]
+//   hq task cost <task> <usd> [--model <id>]
+//   hq task shelve <task> --why <text>
+//   hq task cause <task> <cheat|misunderstanding|other> [--note <text>]
+//   hq task false-reject <task> <gate> [--note <text>]
+//   hq escalate --goal <goal> --why <text> [--task <task>] [--minutes <n>]
+//   hq escape <task> --note <text>
+//   hq stats [--json | --tasks]
 
 import { closeSync, openSync, readSync } from "node:fs";
+import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
 import { git, revParse } from "./git";
 import { guard, installHook } from "./guard";
+import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { merge } from "./merge";
-import { readReportMeta, report } from "./report";
+import { readReportMarkdown, readReportMeta, report } from "./report";
+import { render, rows, stats } from "./stats";
 
 /** One line typed on the controlling terminal. An agent's shell has none, so it cannot answer. */
 export function readTerminalLine(prompt: string): string {
@@ -34,6 +47,11 @@ export function readTerminalLine(prompt: string): string {
   return line.trim();
 }
 
+/**
+ * Shows the report, then asks. Active time (D39) is measured here, at the approval entry:
+ * from showing you the report to your answer, so time the goal spent waiting for you
+ * does not count.
+ */
 export function approve(cwd: string, goal: string): string {
   if (!validGoal(goal)) throw new Error(`bad goal name ${goal}: lowercase letters, digits and dashes`);
   const head = revParse(goalBranch(goal), cwd);
@@ -42,12 +60,87 @@ export function approve(cwd: string, goal: string): string {
   const r = readReportMeta(cwd, goal, head);
   if (!r) throw new Error(`no report for ${goalBranch(goal)} at ${head.slice(0, 12)}: run \`hq report ${goal}\` and read it first`);
   if (r.test_code !== 0) throw new Error(`the report for ${head.slice(0, 12)} shows failing tests (exit ${r.test_code}); fix them first`);
-  console.error(git(["log", "--oneline", `${MAIN}..${head}`], cwd) || "(no commits ahead of main)");
-  console.error(git(["diff", "--stat", `${MAIN}...${head}`], cwd));
+  console.error(readReportMarkdown(cwd, goal, head));
+  const shown = Date.now();
+  append(cwd, { type: "report.shown", goal, commit: head });
   const typed = readTerminalLine(`Approve ${goalBranch(goal)} at ${head.slice(0, 12)}? Type the goal name to approve: `);
   if (typed !== goal) throw new Error("not approved");
   writeApproval(cwd, { goal, branch: goalBranch(goal), commit: head, approved_at: new Date().toISOString() });
+  append(cwd, { type: "approve", goal, commit: head, active_s: Math.round((Date.now() - shown) / 1000) });
   return head;
+}
+
+function oneOf<T extends string>(v: string | undefined, allowed: readonly T[], what: string): T {
+  if (!v || !allowed.includes(v as T)) throw new Error(`${what} must be one of ${allowed.join(", ")}`);
+  return v as T;
+}
+
+function need(v: string | undefined, what: string): string {
+  if (!v) throw new Error(`missing ${what}`);
+  return v;
+}
+
+/** `hq task …`, `hq escalate`, `hq escape`: the events hq does not witness itself. */
+export function record(cwd: string, args: string[]): string {
+  const { values: o, positionals: p } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      goal: { type: "string" }, title: { type: "string" }, difficulty: { type: "string", default: "medium" },
+      model: { type: "string" }, base: { type: "string" }, "claimed-done": { type: "boolean", default: false },
+      note: { type: "string" }, why: { type: "string" }, task: { type: "string" }, minutes: { type: "string" },
+    },
+  });
+  const [cmd, sub, ...rest] = p;
+  if (cmd === "escalate") {
+    const goal = need(o.goal, "--goal");
+    const minutes = o.minutes === undefined ? undefined : Number(o.minutes);
+    if (minutes !== undefined && !(minutes >= 0)) throw new Error("--minutes must be a number");
+    append(cwd, { type: "escalate", goal, task: o.task, why: need(o.why, "--why"), minutes });
+    return `escalation recorded for goal ${goal}`;
+  }
+  if (cmd === "escape") {
+    append(cwd, { type: "escape", task: need(sub, "<task>"), note: need(o.note, "--note") });
+    return `escape recorded for task ${sub}`;
+  }
+  if (cmd !== "task") throw new Error("unknown command");
+  const task = need(rest[0], "<task>");
+  if (sub !== "start" && !readEvents(cwd).some((e) => e.type === "task.start" && e.task === task)) throw new Error(`no task ${task}: hq task start it first`);
+  switch (sub) {
+    case "start": {
+      const goal = need(o.goal, "--goal");
+      if (!validGoal(goal)) throw new Error(`bad goal name ${goal}`);
+      const base = o.base ?? revParse(goalBranch(goal), cwd) ?? revParse(MAIN, cwd);
+      if (!base) throw new Error("no base commit: pass --base");
+      append(cwd, {
+        type: "task.start", task, goal, title: need(o.title, "--title"), base: git(["rev-parse", base], cwd),
+        difficulty: oneOf(o.difficulty, DIFFICULTIES, "--difficulty"), model: need(o.model ?? process.env.HQ_MODEL, "--model"),
+      });
+      return `task ${task} started on goal ${goal}`;
+    }
+    case "gate":
+      append(cwd, {
+        type: "task.gate", task, gate: oneOf(rest[1], GATES, "gate"), result: oneOf(rest[2], ["pass", "fail"] as const, "result"),
+        claimed_done: o["claimed-done"]!, note: o.note,
+      });
+      return `gate recorded for task ${task}`;
+    case "cost": {
+      const usd = Number(rest[1]);
+      if (!(usd >= 0)) throw new Error("<usd> must be a number");
+      append(cwd, { type: "task.cost", task, usd, model: o.model });
+      return `cost recorded for task ${task}`;
+    }
+    case "shelve":
+      append(cwd, { type: "task.shelve", task, why: need(o.why, "--why") });
+      return `task ${task} shelved`;
+    case "cause":
+      append(cwd, { type: "task.cause", task, cause: oneOf(rest[1], CAUSES, "cause"), note: o.note });
+      return `failure cause recorded for task ${task}`;
+    case "false-reject":
+      append(cwd, { type: "task.false_reject", task, gate: oneOf(rest[1], GATES, "gate"), note: o.note });
+      return `false reject recorded for task ${task}`;
+  }
+  throw new Error(`unknown task command ${sub}`);
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -80,11 +173,22 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (cmd === "guard") return await guard(cwd);
+    if (cmd === "stats") {
+      const events = readEvents(cwd);
+      if (argv.includes("--tasks")) for (const r of rows(events)) console.log(JSON.stringify(r));
+      else if (argv.includes("--json")) console.log(JSON.stringify(stats(events), null, 2));
+      else console.log(render(stats(events)));
+      return 0;
+    }
+    if (cmd === "task" || cmd === "escalate" || cmd === "escape") {
+      console.log(record(cwd, argv));
+      return 0;
+    }
   } catch (e) {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq report <goal> | hq approve <goal> | hq merge <goal> | hq install-hook");
+  console.error("usage: hq report|approve|merge <goal> | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
   return 2;
 }
 
