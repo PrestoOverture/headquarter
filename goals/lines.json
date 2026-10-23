@@ -8,5 +8,7 @@
     "End-to-end tests in hq/test with a real git repository and a temporary HQ_HOME cover: the size rule and its exclusions, the event written by a real merge, the manual command and its refusals, and the stats output"
   ],
   "shelved": [],
-  "known_issues": []
+  "known_issues": [
+    "hq merge appends the `merge` ledger event after main has moved, unguarded: a failed write (full disk) still makes hq merge throw after merging. Pre-existing since M0.3, not this goal's; found by the answerer in rework 1."
+  ]
 }
