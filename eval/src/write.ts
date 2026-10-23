@@ -23,7 +23,7 @@ import { findTask, type PublicTask } from "./tasks";
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
 export const EFFORT = "high";
 const RUN_CAP_MS = 60 * 60 * 1000;
-const WS_ROOT = "/tmp/ws"; // outside the repo: agents walk parent dirs for CLAUDE.md / AGENTS.md
+const WS_ROOT = process.env.HQ_WS_ROOT ?? "/tmp/ws"; // outside the repo: agents walk parent dirs for CLAUDE.md / AGENTS.md; HQ_WS_ROOT is for tests
 
 // In -p mode the session ends when the model ends its turn (same note as c2c's runs).
 const HEADLESS =
