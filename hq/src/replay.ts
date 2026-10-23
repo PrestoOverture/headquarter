@@ -7,10 +7,12 @@ import { newGoal } from "./goal";
 import { GATES, readEvents } from "./ledger";
 import { rows, type TaskRow } from "./stats";
 
+/** An acceptance entry is a string, or {"text": ..., "traces": ...} (see trace.ts); replay copies it as it is. */
+type Criterion = string | { text: string; [key: string]: unknown };
 export type Replay = { path: string; branch: string; base: string; original: TaskRow };
 
 /** The title of the goal file at `base` and the task's acceptance criteria: tasks.<task>, else the top level. */
-function readGoalFile(cwd: string, base: string, goal: string, task: string): { title: string; acceptance: string[] } {
+function readGoalFile(cwd: string, base: string, goal: string, task: string): { title: string; acceptance: Criterion[] } {
   const where = `goals/${goal}.json at ${base.slice(0, 12)}`;
   const r = run(["git", "show", `${base}:goals/${goal}.json`], cwd);
   if (r.code !== 0) throw new Error(`no ${where}: nothing to copy the title and acceptance criteria from`);
@@ -22,8 +24,8 @@ function readGoalFile(cwd: string, base: string, goal: string, task: string): { 
   }
   const own = file?.tasks?.[task];
   const acceptance = own && typeof own === "object" && "acceptance" in own ? own.acceptance : (file?.acceptance ?? []);
-  if (typeof file?.title !== "string" || !Array.isArray(acceptance) || !acceptance.every((a: unknown) => typeof a === "string")) {
-    throw new Error(`${where} has no title, or its acceptance criteria are not a list of strings`);
+  if (typeof file?.title !== "string" || !Array.isArray(acceptance) || !acceptance.every((a: any) => typeof a === "string" || typeof a?.text === "string")) {
+    throw new Error(`${where} has no title, or its acceptance criteria are not a list of strings or {"text": string} objects`);
   }
   return { title: file.title, acceptance };
 }

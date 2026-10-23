@@ -106,6 +106,24 @@ test("a multi-task goal file gives the task's own acceptance criteria and the go
   expect(r.out).toContain("verdicts none recorded");
 });
 
+test("traced acceptance entries are accepted and copied as they are", () => {
+  const acceptance = ["plain", { text: "traced", traces: "g1" }];
+  const base = commit("goals/tr.json", JSON.stringify({ title: "Traced", criteria: ["goal one"], tasks: { t1: { title: "one", acceptance } } }), "goal tr: start");
+  start("t1", "tr", base);
+  const r = hq("replay", "t1", "--as", "again2");
+  expect(r.code).toBe(0);
+  const made = JSON.parse(readFileSync(join(goals, "again2", "goals", "again2.json"), "utf8"));
+  expect(made.acceptance).toEqual(acceptance);
+});
+
+test("refuses an acceptance entry that has no text", () => {
+  const base = commit("goals/bad.json", JSON.stringify({ title: "Bad", acceptance: [{ traces: "g1" }] }), "goal bad: start");
+  start("t1", "bad", base);
+  const r = hq("replay", "t1");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("acceptance criteria are not a list");
+});
+
 test("reads the goal file as it was at the task's base, not as it is now", () => {
   const base = commit("goals/g.json", JSON.stringify({ title: "Old title", acceptance: ["old"] }), "goal g: start");
   start("t1", "g", base);

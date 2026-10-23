@@ -28,7 +28,7 @@ function goalFile(file: object) {
 /** A checker that logs each prompt (separated by ---) and says DOES-NOT-SERVE when the prompt contains "unrelated", else SERVES. */
 function fakeChecker(): string {
   const path = join(root, "checker.sh");
-  writeFileSync(path, `#!/bin/sh\ninput=$(cat)\nprintf '%s\\n---\\n' "$input" >> "${root}/checker.log"\npwd >> "${root}/checker.cwd"\ncase "$input" in *unrelated*) echo "DOES-NOT-SERVE: no link";; *) echo SERVES;; esac\n`);
+  writeFileSync(path, `#!/bin/sh\ninput=$(cat)\nprintf '%s\\n---\\n' "$input" >> "${root}/checker.log"\npwd >> "${root}/checker.cwd"\ncase "$input" in *unrelated*) echo DOES-NOT-SERVE;; *) echo SERVES;; esac\n`);
   chmodSync(path, 0o755);
   return path;
 }
@@ -54,13 +54,21 @@ const clean = {
 };
 
 describe("parseAnswer", () => {
-  test("each answer, with surrounding words, and the unclear cases", () => {
+  test("exactly SERVES or DOES-NOT-SERVE, with only markdown and a final period around it", () => {
     expect(parseAnswer("SERVES\n")).toBe("SERVES");
-    expect(parseAnswer("DOES-NOT-SERVE: it is about something else")).toBe("DOES-NOT-SERVE");
-    expect(parseAnswer("I think it SERVES the goal")).toBe("SERVES");
-    expect(parseAnswer("SERVES... no, DOES-NOT-SERVE")).toBe("NO-ANSWER");
-    expect(parseAnswer("serves")).toBe("NO-ANSWER");
-    expect(parseAnswer("")).toBe("NO-ANSWER");
+    expect(parseAnswer("DOES-NOT-SERVE")).toBe("DOES-NOT-SERVE");
+    expect(parseAnswer("  **SERVES**.  ")).toBe("SERVES");
+    expect(parseAnswer("`DOES-NOT-SERVE`")).toBe("DOES-NOT-SERVE");
+    expect(parseAnswer("SERVES.")).toBe("SERVES");
+  });
+
+  test("misspellings, negations, prose, both words and empty output are no answer", () => {
+    for (const out of [
+      "DOES-NOT-SERVES", "NOT SERVES", "NOT-SERVES", "DOES NOT SERVE", "I would not say SERVES.", "I think it SERVES the goal",
+      "DOES-NOT-SERVE: it is about something else", "SERVES... no, DOES-NOT-SERVE", "SERVES\nDOES-NOT-SERVE", "serves", "SERVES?", "",
+    ]) {
+      expect(parseAnswer(out)).toBe("NO-ANSWER");
+    }
   });
 });
 
@@ -154,6 +162,12 @@ describe("hq trace --check-with", () => {
     const r2 = hq("trace", "g", "--check-with", "echo maybe");
     expect(r2.code).toBe(1);
     expect(r2.out).toContain("NO-ANSWER (maybe)");
+    const r3 = hq("trace", "g", "--check-with", "echo SERVES; exit 1");
+    expect(r3.code).toBe(1);
+    expect(r3.out).toContain("t1#1 -> g1: NO-ANSWER (checker exited 1");
+    const r4 = hq("trace", "g", "--check-with", "echo DOES-NOT-SERVES");
+    expect(r4.code).toBe(1);
+    expect(r4.out).toContain("NO-ANSWER (DOES-NOT-SERVES)");
   });
 
   test("structural problems are reported alongside, and untraceable criteria are not sent to the checker", () => {

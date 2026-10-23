@@ -68,10 +68,10 @@ export function readCriteria(cwd: string, goal: string): { goal: GoalCriterion[]
   return { goal: list.map((text: string, i: number) => ({ id: `g${i + 1}`, text })), tasks };
 }
 
-/** SERVES or DOES-NOT-SERVE if the output says exactly one of them as a word; anything else is no answer. */
+/** SERVES or DOES-NOT-SERVE if that is the whole answer (bold, backticks and a final period aside); anything else is no answer. */
 export function parseAnswer(output: string): Answer {
-  const found = new Set(output.match(/\b(?:DOES-NOT-SERVE|SERVES)\b/g));
-  return found.size === 1 ? ([...found][0] as Answer) : "NO-ANSWER";
+  const word = output.trim().replace(/^[*`]+/, "").replace(/[*`]*\.?[*`]*$/, "");
+  return word === "SERVES" || word === "DOES-NOT-SERVE" ? word : "NO-ANSWER";
 }
 
 /** Runs the checker through `sh -c` with the prompt on stdin; a checker that fails or says nothing clear has not said SERVES. */
