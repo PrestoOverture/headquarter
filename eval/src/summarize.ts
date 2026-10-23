@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Verdict } from "./judge";
 
-type Report = { instance_id: string; language: string; verdict: Verdict };
+export type Report = { instance_id: string; language: string; verdict: Verdict; graded_at?: string };
 
 export function summarize(reports: Report[], missing: string[]) {
   const counts: Partial<Record<Verdict, number>> = {};
@@ -27,9 +27,8 @@ export function summarize(reports: Report[], missing: string[]) {
   };
 }
 
-if (import.meta.main) {
-  const dir = process.argv[2];
-  if (!dir) throw new Error("usage: bun src/summarize.ts <results dir>");
+/** Reads <dir>/<id>/report.json for every id directory; ids without one are "missing". */
+export function readResults(dir: string) {
   const reports: Report[] = [];
   const missing: string[] = [];
   for (const id of readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
@@ -37,12 +36,26 @@ if (import.meta.main) {
     if (existsSync(p)) reports.push(JSON.parse(readFileSync(p, "utf8")));
     else missing.push(id);
   }
+  return { reports, missing };
+}
+
+export function markdown(s: ReturnType<typeof summarize>): string {
+  const pct = s.catch_rate === null ? "n/a" : `${(s.catch_rate * 100).toFixed(1)}%`;
+  const lines = [
+    `## Step 0: writer catch rate ${pct} (${s.caught}/${s.graded})\n`,
+    `Stop line (≥ 50%): ${s.passes_stop_line === null ? "n/a" : s.passes_stop_line ? "passed" : "NOT passed"}\n`,
+    "| verdict | tasks |\n| --- | --- |",
+  ];
+  for (const [v, n] of Object.entries(s.counts).sort((a, b) => b[1] - a[1])) lines.push(`| ${v} | ${n} |`);
+  if (s.missing.length) lines.push(`\nNo report (job failed): ${s.missing.join(", ")}`);
+  return lines.join("\n");
+}
+
+if (import.meta.main) {
+  const dir = process.argv[2];
+  if (!dir) throw new Error("usage: bun src/summarize.ts <results dir>");
+  const { reports, missing } = readResults(dir);
   const s = summarize(reports, missing);
   writeFileSync(join(dir, "summary.json"), JSON.stringify(s, null, 2) + "\n");
-  const pct = s.catch_rate === null ? "n/a" : `${(s.catch_rate * 100).toFixed(1)}%`;
-  console.log(`## Step 0: writer catch rate ${pct} (${s.caught}/${s.graded})\n`);
-  console.log(`Stop line (≥ 50%): ${s.passes_stop_line === null ? "n/a" : s.passes_stop_line ? "passed" : "NOT passed"}\n`);
-  console.log("| verdict | tasks |\n| --- | --- |");
-  for (const [v, n] of Object.entries(s.counts).sort((a, b) => b[1] - a[1])) console.log(`| ${v} | ${n} |`);
-  if (missing.length) console.log(`\nNo report (job failed): ${missing.join(", ")}`);
+  console.log(markdown(s));
 }

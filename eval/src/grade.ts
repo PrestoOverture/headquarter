@@ -5,7 +5,8 @@
 //
 //   bun src/grade.ts --tasks tasks/tasks.json.gz --id <instance_id> --results results
 //
-// Reads <results>/<id>/writer.patch, writes report.json and buggy.log / fixed.log.
+// Reads <results>/<id>/writer.patch, writes report.json (with graded_at, for merge-runs)
+// and buggy.log / fixed.log.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -98,6 +99,7 @@ function main() {
     instance_id: task.instance_id,
     language: task.language,
     verdict: verdict(writerPatch, task.patch, buggy, fixed),
+    graded_at: new Date().toISOString(),
     buggy,
     fixed,
   };
