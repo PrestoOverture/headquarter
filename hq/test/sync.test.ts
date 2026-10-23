@@ -167,3 +167,66 @@ test("refuses a bad goal name, a missing goal, and a goal without a worktree", (
   expect(r.err).toContain("not checked out");
   expect(git(["rev-parse", "goal/loose"], repo)).not.toBe(git(["rev-parse", "main"], repo));
 });
+
+test("main adding a tracked file where the worktree has an ignored one fails and keeps the ignored file", () => {
+  commit(wt, ".gitignore", "secret.txt\n", "ignore secret");
+  writeFileSync(join(wt, "secret.txt"), "local only\n");
+  commit(repo, "secret.txt", "from main\n", "main tracks secret");
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("secret.txt");
+  expect(r.out).toBe("");
+  expect(readFileSync(join(wt, "secret.txt"), "utf8")).toBe("local only\n");
+  expect(state()).toBe(before);
+});
+
+test("main adding a directory where the worktree has an ignored file fails too", () => {
+  commit(wt, ".gitignore", "cache\n", "ignore cache");
+  writeFileSync(join(wt, "cache"), "local only\n");
+  mkdirSync(join(repo, "cache"));
+  commit(repo, "cache/x.txt", "from main\n", "main adds cache dir");
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("cache/x.txt");
+  expect(readFileSync(join(wt, "cache"), "utf8")).toBe("local only\n");
+  expect(state()).toBe(before);
+});
+
+test("a merge the user left uncommitted, with a clean status, is refused and not aborted", () => {
+  git(["checkout", "-q", "-b", "side", "main"], repo);
+  commit(repo, "side.txt", "side\n", "side work");
+  git(["checkout", "-q", "main"], repo);
+  commit(repo, "other.txt", "o2\n", "main moves");
+  git(["merge", "-s", "ours", "--no-commit", "side"], wt);
+  const mergeHead = join(git(["rev-parse", "--absolute-git-dir"], wt), "MERGE_HEAD");
+  const pending = readFileSync(mergeHead, "utf8");
+  expect(git(["status", "--porcelain"], wt)).toBe("");
+  const before = state();
+  const r = hq(repo, "sync", "g");
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("merge in progress");
+  expect(r.out).toBe("");
+  expect(readFileSync(mergeHead, "utf8")).toBe(pending);
+  expect(state()).toBe(before);
+});
+
+test("a cherry-pick, revert or rebase under way in the worktree is refused and left alone", () => {
+  commit(repo, "other.txt", "o2\n", "main moves");
+  const gitDir = git(["rev-parse", "--absolute-git-dir"], wt);
+  const head = git(["rev-parse", "HEAD"], wt);
+  for (const [marker, what] of [["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["rebase-merge", "rebase"], ["rebase-apply", "rebase"]]) {
+    const path = join(gitDir, marker);
+    if (marker.startsWith("rebase")) mkdirSync(path);
+    else writeFileSync(path, `${head}\n`);
+    const before = state();
+    const r = hq(repo, "sync", "g");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`${what} in progress`);
+    expect(existsSync(path)).toBe(true);
+    expect(state()).toBe(before);
+    run(["rm", "-rf", path], wt);
+  }
+  expect(hq(repo, "sync", "g").code).toBe(0);
+});
