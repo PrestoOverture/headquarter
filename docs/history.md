@@ -2,6 +2,13 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-10-23 M0.5 任务 8：变异测试，合入
+
+- 做了什么：`eval/src/mutants.ts` 把 gold patch 拆成 hunk，每次去掉一块得到「只修了一部分」的变异体（每题最多 8 个）；`grade.ts --mutants` 只对抓住的题评判，结果分 killed / survived / flaky / apply_failed / build_failed / not_graded；summarize 出变异得分（killed ÷ (killed + survived)，带分母）；workflow 的 `mutants` 输入经 STEP0_ 环境变量传。三轮：第一轮 Claude 读 diff 拦下「编译不过的变异体算作杀死，得分虚高」和「`--mutants` 时 job 超时会丢掉正常判卷结果」；第二轮 Codex 拦下「带引号的路径被悄悄跳过」；第三轮第一次全量测试被 hq 的 status 测试超时拖垮（两道审查同时在跑），同一份代码重跑通过，按 D36 记为抖动。你批准、合入：`2db3f26`。
+- 结果 / 数据：779 行；花费约 $6.8（目前最贵）；61 道题共 194 个变异体，8 题超上限。`--mutants` 还没在真实环境跑过。
+- 既有问题：hq 的 status「只读」测试在机器忙时会超时；build_failed 只是下限。
+- 下一步：你决定剩下的任务 9–20 放进同一个目标，最后批准一次。先修「合入时覆盖每个任务的大小」。
+
 ## 2026-10-23 M0.5 任务 7：出题提示词 v2 与 A/B 工具，合入
 
 - 做了什么：`eval/src/writer_prompt_v2.md`（只断言 issue 描述的行为、不扩展复现、只用公开接口、先确认离线可用的测试库），`write.ts --prompt v1|v2`（默认 v1），step0 workflow 的 `prompt` 输入，`eval/ab/` 的漏题单和对照单，`eval/src/ab.ts` 逐题对比。三轮：第一轮 Claude 读 diff 拦下 workflow 的脚本注入（`${{ inputs.prompt }}` 直接拼进 `run:`，同一步有 OAuth token；同一行的 `inputs.model`、`matrix.id` 是我写 M0 workflow 时留下的同类漏洞，一起修）；第二轮又拦下「改用环境变量后 instance id 传进了出题者的环境，泄露 PR 编号」；第三轮全过。Codex 三轮都没发现这两处。你批准、合入：`8b34e88`。
