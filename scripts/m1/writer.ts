@@ -3,7 +3,7 @@
 // does reaches the answerer's repository except the stub commit, fetched only when it passes the
 // checks. The orchestrator then checks the tests fail first, on assertions (D7).
 
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { claude, examDir, git, runDir, sh, writersDir } from "./common";
 import { criteriaOf } from "./interfaces";
@@ -34,6 +34,7 @@ export function write(dir: string, task: string, attempt: number, notes = ""): W
   rmSync(clone, { recursive: true, force: true });
   git(["clone", "-q", "--no-hardlinks", dir, clone], dir);
   for (const d of ["hq", "eval"]) if (existsSync(join(dir, d, "node_modules"))) sh(["ln", "-s", join(dir, d, "node_modules"), join(clone, d, "node_modules")], dir);
+  appendFileSync(join(clone, ".git", "info", "exclude"), "node_modules\n"); // the links: .gitignore's node_modules/ matches directories only
   const start = git(["rev-parse", "HEAD"], clone);
   const prompt = `You are the test writer for a task in this repository (the working directory, at the task's starting point). Someone else will implement the task without ever seeing your tests; they only get the names and assertion messages of the tests that fail. Your tests are the evidence the task is done.
 

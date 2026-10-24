@@ -27,6 +27,16 @@ afterEach(() => { ran++; });
 afterAll(() => { writeSync(1, "\\nm1-seal " + seal + " " + ran + "\\n"); });
 `;
 
+/** A bunfig.toml with `file` preloaded first in its [test] section, the rest kept. */
+export function withPreload(toml: string, file: string): string {
+  const q = JSON.stringify(file);
+  if (/^\s*preload\s*=/m.test(toml)) {
+    return toml.replace(/^(\s*preload\s*=\s*)(\[|("[^"]*"))/m, (_, k, open, one) => (one ? `${k}[${q}, ${one}]` : `${k}[${q}, `));
+  }
+  if (/^\s*\[test\]\s*$/m.test(toml)) return toml.replace(/^(\s*\[test\]\s*)$/m, `$1\npreload = [${q}]`);
+  return `${toml}${toml && !toml.endsWith("\n") ? "\n" : ""}[test]\npreload = [${q}]\n`;
+}
+
 type Run = { code: number; out: string; timedOut: boolean };
 export type Graded = { commit: string; passed: boolean; runs: number[]; flaky: boolean; kind: "assertion" | "other" | null; tests: { pass: number; fail: number; skip: number }; sealed: number; suspect: boolean; feedback: string; log: string };
 
@@ -73,9 +83,8 @@ export async function grade(task: string, dir: string, commit: string, expected?
     cpSync(join(exam, "files"), scratch, { recursive: true });
     writeFileSync(join(cfg, "seal.ts"), SEAL);
     for (const d of ["", "hq", "eval"]) {
-      if (!existsSync(join(scratch, d))) continue;
-      if (existsSync(join(scratch, d, "bunfig.toml"))) throw new Error(`${join(d, "bunfig.toml")} exists: the grader's preload cannot be added`);
-      writeFileSync(join(scratch, d, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(join(cfg, "seal.ts"))}]\n`);
+      const f = join(scratch, d, "bunfig.toml");
+      if (existsSync(join(scratch, d))) writeFileSync(f, withPreload(existsSync(f) ? readFileSync(f, "utf8") : "", join(cfg, "seal.ts")));
     }
     const sealed = (out: string, secret: string) => [...out.matchAll(/^m1-seal (\S+) (\d+)$/gm)].filter((m) => m[1] === secret).reduce((a, m) => a + Number(m[2]), 0);
     const once = () => {

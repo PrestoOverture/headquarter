@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { claude, examDir, git, repo, runDir, sh } from "./common";
+import { claude, examDir, git, repo, runDir, sh, usageLimited } from "./common";
 import { falsify } from "./falsify";
 import { grade } from "./grade";
 import { criteriaOf, interfaces } from "./interfaces";
@@ -45,7 +45,7 @@ const finish = (result: string, extra: object = {}, code = 0) => {
 function spent(log: string, model: string, usd: number, result: any) {
   if (usd > 0) hqRun("task", "cost", task, String(Math.round(usd * 1e4) / 1e4), "--model", model);
   // Only the session's final result says whether it hit the limit; the log can quote that text.
-  if (result?.is_error && /hit your (session )?limit/i.test(String(result?.result ?? ""))) { save(); finish("usage_limit", { log }, 6); }
+  if (usageLimited(result)) { save(); finish("usage_limit", { log }, 6); }
 }
 
 // 1. The task's sanitized repository; the M1 task in the ledger.

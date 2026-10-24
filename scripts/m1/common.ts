@@ -61,7 +61,7 @@ export function deniedReads(task: string, opts: { exam: boolean; scratch?: boole
   const all = (kind: string) => (existsSync(join(M1_HOME, kind)) ? readdirSync(join(M1_HOME, kind)).map((t) => join(M1_HOME, kind, t)) : []);
   const others = (kind: string) => all(kind).filter((d) => !d.endsWith(`/${task}`));
   return [
-    repo, `${repo}.goals`, hqHome(),
+    repo, `${repo}.goals`, hqHome(), join(home, ".hq"), // the installed hq and its ledger, also when HQ_HOME points elsewhere (a dry run)
     // Claude Code's records (transcripts, file history, prompt history, paste cache, ...): all of
     // ~/.claude but the shell snapshots its Bash tool sources. Codex's, all of them (M1 sessions never run Codex).
     ...(existsSync(join(home, ".claude")) ? readdirSync(join(home, ".claude")).filter((d) => d !== "shell-snapshots").map((d) => join(home, ".claude", d)) : []),
@@ -90,6 +90,9 @@ export function claudeEnv(): Record<string, string> {
   return env;
 }
 
+/** A session that ended on the plan's usage limit ("hit your limit", "hit your session limit", "hit your weekly limit"). */
+export const usageLimited = (result: any) => !!result?.is_error && /hit your (\w+ )?limit/i.test(String(result?.result ?? ""));
+
 /** Runs `claude -p` with the prompt on stdin, in a temp directory of its own; returns the stream-json log and its result. */
 export function claude(args: string[], prompt: string, cwd: string, timeoutMs = 60 * 60 * 1000) {
   mkdirSync(TMP_ROOT, { recursive: true });
@@ -107,7 +110,7 @@ export function claude(args: string[], prompt: string, cwd: string, timeoutMs = 
       if (m.type === "result") result = m;
     } catch {}
   }
-  return { log, result, limited: !!result?.is_error && /hit your (session )?limit/i.test(result?.result ?? "") };
+  return { log, result, limited: usageLimited(result) };
 }
 
 // ---------- Bun test output ----------

@@ -59,8 +59,26 @@ test("feedback strips color codes and caps its length", () => {
   expect(feedback(`Received: "${"x".repeat(1000)}"`).length).toBeLessThanOrEqual(400);
 });
 
+test("a usage limit is read from the session's final error only, whatever the period", async () => {
+  const { usageLimited } = await import("./common");
+  expect(usageLimited({ is_error: true, result: "You've hit your weekly limit · resets 9am (Asia/Shanghai)" })).toBe(true);
+  expect(usageLimited({ is_error: true, result: "You've hit your session limit" })).toBe(true);
+  expect(usageLimited({ is_error: true, result: "You've hit your limit" })).toBe(true);
+  expect(usageLimited({ is_error: false, result: "the eval files say: hit your limit" })).toBe(false);
+  expect(usageLimited(null)).toBe(false);
+});
+
 test("summary adds up every bun test summary in the output", () => {
   expect(summary(ASSERTION_RUN)).toEqual({ pass: 0, fail: 1, skip: 0 });
   expect(summary(" 3 pass\n 0 fail\n...\n 2 pass\n 1 skip\n 1 todo\n 1 fail")).toEqual({ pass: 5, fail: 1, skip: 2 });
   expect(summary("exit 0, no tests ran")).toEqual({ pass: 0, fail: 0, skip: 0 });
+});
+
+test("the grader's preload goes first into any bunfig.toml, the rest kept", async () => {
+  const { withPreload } = await import("./grade");
+  expect(withPreload("", "/c/seal.ts")).toBe('[test]\npreload = ["/c/seal.ts"]\n');
+  expect(withPreload("[test]\n# slow\ntimeout = 30000\n", "/c/seal.ts")).toBe('[test]\npreload = ["/c/seal.ts"]\n# slow\ntimeout = 30000\n');
+  expect(withPreload('[test]\npreload = ["./a.ts"]\n', "/c/seal.ts")).toBe('[test]\npreload = ["/c/seal.ts", "./a.ts"]\n');
+  expect(withPreload('[test]\npreload = "./a.ts"\n', "/c/seal.ts")).toBe('[test]\npreload = ["/c/seal.ts", "./a.ts"]\n');
+  expect(withPreload('[install]\nexact = true', "/c/seal.ts")).toBe('[install]\nexact = true\n[test]\npreload = ["/c/seal.ts"]\n');
 });
