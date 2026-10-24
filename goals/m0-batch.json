@@ -1,0 +1,160 @@
+{
+  "title": "M0 tasks 9-20 in one goal, approved once at the end",
+  "acceptance": [],
+  "shelved": [
+    {
+      "task": "t14 hq sync",
+      "why": "Shelved after 4 review rounds (user's rule). Merging main into a goal worktree in place kept losing ignored or untracked local files: through paths main adds, paths it modifies, directory-rename detection, case folding on case-insensitive file systems, and ignored nested git repositories. A safer design merges in a scratch worktree and only fast-forwards the goal worktree when its checkout cannot touch any untracked or ignored path. The four commits are reverted on this branch."
+    }
+  ],
+  "known_issues": [
+    "t10 hq review: the temporary branch name embeds the task id, so an id containing '..' (or other ref-invalid sequences) cannot run its review (Codex P2, round 2). Ids in use are tNN.",
+    "t17 finding (answers tech_stacks 待核实 on Codex isolation, partly): run for real on 2026-10-24, Codex under srt with the executor rules and its API hosts allowed never reached its API (requests timed out, the probe never ran), while curl through the same srt proxy reached chatgpt.com (403) and api.openai.com (401). So Codex's HTTP client does not go through srt's proxy as configured; Codex cannot be sandboxed this way yet. codex-check.ts reports this honestly (exit 1) and cleans up; ~/.codex was untouched."
+  ],
+  "tasks": {
+    "t09": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "Escape candidates: hq merge points at goals that later fixes touched",
+      "difficulty": "medium",
+      "acceptance": [
+        "When `hq merge` merges a goal, it lists escape candidates: tasks of goals merged into main in the last 14 days (from the ledger's merge events) whose changed files this goal's commits touch again, and this goal's commits look like a fix (a subject containing fix, bug, regression or revert, case-insensitive) or include a revert of that goal's merge commit",
+        "Candidates are printed after the merge result as suggestions (`hq escape <task> --note ...` to record one); nothing is recorded automatically and the merge itself never fails because of this step",
+        "`hq escapes` prints the same candidates for the current main without merging anything",
+        "End-to-end tests with a real git repository and a temporary HQ_HOME: a later fix touching an earlier goal's file is a candidate; one outside 14 days, one touching other files, and a non-fix commit are not; a revert of the merge commit is"
+      ]
+    },
+    "t10": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "hq review <goal>: Codex review as a recorded gate",
+      "difficulty": "medium",
+      "acceptance": [
+        "`hq review <goal> --task <task>` runs `codex review --base <ref>` on the goal's worktree against the task's recorded base (via a throwaway branch it deletes afterwards), saves the full output under $HQ_HOME/reviews/<repo>/<goal>-<commit12>-<task>.txt, and prints it",
+        "It parses the findings (lines like `- [P0]`..`[P3] title — path:line`) into a list with priority, title, file and line; P0 and P1 mean the gate failed, P2 and P3 do not, and no findings means passed",
+        "It records a `task.gate` event (gate codex_review, pass or fail, claimed_done from `--claimed-done`) with a note naming the findings, unless `--no-record` is given",
+        "Tests use a fake `codex` executable on PATH (no network): parsing of each priority, an empty review, a codex that exits non-zero (the gate is not recorded and the command fails), and the recorded event"
+      ]
+    },
+    "t11": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "Report risk column: new imports, new process and network calls",
+      "difficulty": "medium",
+      "acceptance": [
+        "The goal report's risk column gains two lists: new imports (import/require/use/#include lines added in the goal's diff for modules not imported anywhere on main) and new process or network calls (added lines that call child_process, Bun.spawn, exec/spawn, fetch, http(s).request, net.connect, curl or wget)",
+        "Each item names the file and line in the goal's version; an empty list says so; the lists are clues and the report says that",
+        "Only added lines count; a line moved within a file is not new; test files are listed separately from source files",
+        "Tests cover TypeScript, Rust and C examples of each kind, a moved line, and the empty case"
+      ]
+    },
+    "t12": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "Costs from the session record: hq task cost --from",
+      "difficulty": "medium",
+      "acceptance": [
+        "`hq task cost <task> --from <file>` reads a Claude Code stream-json log (claude -p --output-format stream-json) or a json result (--output-format json) and records the session's total_cost_usd and model as a task.cost event",
+        "A file with several sessions' result lines records their sum; a file with no result line is refused with a non-zero exit and nothing recorded; the same file recorded twice for the same task is refused (its path and content hash are kept in the event)",
+        "scripts/m0/answer.ts and review.ts are not changed by this task",
+        "Tests cover a stream-json log, a json result, several results, no result, and the duplicate refusal"
+      ]
+    },
+    "t13": {
+      "scope": "eval",
+      "check": "cd eval && bun test && bunx tsc --noEmit",
+      "title": "step0: disk preflight and excluded_disk",
+      "difficulty": "medium",
+      "acceptance": [
+        "Before pulling a task image, the write and grade jobs compare the image's size (from the registry manifest, compressed layers summed, times a factor of 2.5 for extraction) with the free space on Docker's data root; if it does not fit, the job records verdict `excluded_disk` with both numbers instead of failing",
+        "`excluded_disk` is a new verdict that counts in neither the numerator nor the denominator of the catch rate and is listed in the summary with its numbers",
+        "The workflow gets a `runner` input (choice: ubuntu-latest, ubuntu-latest-16-cores; default ubuntu-latest) for the write and grade jobs, passed through env, never interpolated into a run: script",
+        "Tests cover the size estimate from a manifest fixture, the fit decision, the verdict in the summary, and the workflow input"
+      ]
+    },
+    "t14": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "hq sync <goal>: bring main into a goal branch",
+      "difficulty": "medium",
+      "acceptance": [
+        "`hq sync <goal>` merges the latest main into goal/<name> in the goal's worktree (a merge commit, never a rebase), refusing if the worktree has uncommitted changes",
+        "On a conflict it aborts the merge, leaves the branch and worktree exactly as they were, and lists the conflicting files",
+        "After a successful sync it says that the goal's approval and report no longer match (they name the old commit) and that `hq report` must be run again; it does not touch $HQ_HOME",
+        "End-to-end tests: clean sync, conflict leaving everything unchanged, dirty worktree refused, nothing to sync, and that a previous approval is void afterwards (hq merge refuses it)"
+      ]
+    },
+    "t15": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "hq replay <task>: recreate a task's starting point",
+      "difficulty": "hard",
+      "acceptance": [
+        "`hq replay <task> [--as <name>]` creates goal/<name> (default replay-<task>) from the task's recorded base commit in a new linked worktree, writes goals/<name>.json with the original goal's title and the task's acceptance criteria (from the goal file at that base, under tasks.<task> or the top level) and `replay_of: <task>`, and records nothing in the ledger",
+        "It refuses, creating nothing, when the task is unknown, its base commit is missing from the repository, or the branch or worktree already exists",
+        "It prints the worktree path, the branch, the base commit and the original task's recorded size and verdicts for comparison",
+        "End-to-end tests with a real repository and ledger cover success with a top-level goal file, with a multi-task goal file, and each refusal"
+      ]
+    },
+    "t16": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "hq env <task>: per-task ports, temp dir and database name",
+      "difficulty": "hard",
+      "acceptance": [
+        "`hq env <task>` allocates to the task a block of 10 consecutive ports in 20000-29999, a temp directory under $TMPDIR/hq-env/<task>, and a database name hq_<task>, and prints them as shell `export` lines (HQ_PORT_BASE, HQ_TMPDIR, HQ_DB_NAME)",
+        "Allocations live in $HQ_HOME/env/<repo>.json and are made under an exclusive lock (a lock file created with O_EXCL, stale after 60 s), so two concurrent runs never get the same ports; the same task gets the same allocation again; `hq env --release <task>` frees it",
+        "A port block is skipped if any of its ports is in use at allocation time (checked by binding on 127.0.0.1)",
+        "Tests cover allocation, reuse, release, 20 concurrent allocations without overlap, a stale lock, and skipping a busy port"
+      ]
+    },
+    "t17": {
+      "scope": "scripts/sandbox",
+      "check": "bun test scripts/sandbox",
+      "title": "Codex executor sandbox check (tech_stacks 待核实)",
+      "difficulty": "hard",
+      "acceptance": [
+        "scripts/sandbox/codex-check.ts runs `codex exec` inside srt (the executor rules of hq/src/sandbox.ts, from the hq package's node_modules/.bin/srt) in a throwaway linked worktree, has it run probe.sh once, and reads the probe's PASS/FAIL lines from the exec output, the same checks as check.ts",
+        "From outside the sandbox it confirms main, hooks and config are unchanged, and that the probe's commit landed on its branch; it cleans up the worktree and branch",
+        "Its result says which probe checks pass under srt-wrapped Codex and which do not, with a non-zero exit if any expected denial is not denied",
+        "Unit tests (no Codex, no network) cover parsing Codex exec output into probe lines and the settings it passes to srt; the real run is for the orchestrator"
+      ]
+    },
+    "t18": {
+      "scope": "eval",
+      "check": "cd eval && bun test && bunx tsc --noEmit",
+      "title": "eval writer flow tested with fake claude and docker",
+      "difficulty": "hard",
+      "acceptance": [
+        "Tests run eval/src/write.ts end to end with fake `claude` and `docker` executables on PATH: the fake docker records its calls and serves a small /testbed; the fake claude edits files in its working directory and prints a stream-json result",
+        "They check: the workspace is under an opaque name with no instance id; the git history is squashed when sanitize_git is set; the work container is started with --network none; the agent's environment has no STEP0_* variable, no GitHub token and the proxy variables; the writer patch excludes build outputs; write.json has the model, prompt version and claude result",
+        "They check the refusals: an authentication failure or a rate limit in the agent log leaves no write.json",
+        "No real network, Docker or Claude call is made by the tests"
+      ]
+    },
+    "t19": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "Merge queue: several goals merge one at a time",
+      "difficulty": "hard",
+      "acceptance": [
+        "`hq merge` takes an exclusive per-repository merge lock ($HQ_HOME/merge/<repo>.lock, created with O_EXCL, holding the pid; stale when that pid is gone); a second hq merge waits up to --wait seconds (default 0: refuse at once with the holder's pid)",
+        "If main moved while the tests ran, instead of refusing it redoes the trial merge on the new main once (rebuilding the merge commit and rerunning the tests) and refuses only if main moves again",
+        "The approval check stays exactly as it is: the approved commit must still be the goal branch head",
+        "Tests: two concurrent merges of different goals end with both merged one after the other; a stale lock is taken over; main moving once during the tests is retried and merged; moving twice is refused"
+      ]
+    },
+    "t20": {
+      "scope": "hq",
+      "check": "cd hq && bun test && bunx tsc --noEmit",
+      "title": "Acceptance criteria traceability check",
+      "difficulty": "hard",
+      "acceptance": [
+        "goals/<goal>.json may give each task-level criterion a `traces` field naming the goal-level criterion it serves (goal-level criteria get ids g1, g2, ... in a top-level `criteria` list)",
+        "`hq trace <goal> [--check-with <cmd>]` reports task criteria with no trace or a trace to a missing goal criterion, and goal criteria no task traces to; exit non-zero if any",
+        "With --check-with, each trace is checked by an external command that is not the author (default: a fresh `claude -p` session given only the two criteria texts, asked to answer SERVES or DOES-NOT-SERVE); the answers are printed and a DOES-NOT-SERVE fails the check",
+        "Tests use a fake checker command: untraced task criteria, dangling traces, uncovered goal criteria, a DOES-NOT-SERVE answer, and all clean"
+      ]
+    }
+  }
+}

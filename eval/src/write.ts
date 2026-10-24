@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { excludedForDisk, excludedReport, gb } from "./disk";
 import { patchFiles, SCRIPT } from "./judge";
 import { BlockProxy } from "./proxy";
 import { run, sh } from "./sh";
@@ -22,7 +23,7 @@ import { findTask, type PublicTask } from "./tasks";
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
 export const EFFORT = "high";
 const RUN_CAP_MS = 60 * 60 * 1000;
-const WS_ROOT = "/tmp/ws"; // outside the repo: agents walk parent dirs for CLAUDE.md / AGENTS.md
+const WS_ROOT = process.env.HQ_WS_ROOT ?? "/tmp/ws"; // outside the repo: agents walk parent dirs for CLAUDE.md / AGENTS.md; HQ_WS_ROOT is for tests
 
 // In -p mode the session ends when the model ends its turn (same note as c2c's runs).
 const HEADLESS =
@@ -177,6 +178,12 @@ async function main() {
   if (existsSync(join(runDir, "write.json"))) return console.log(`${task.instance_id}: already written`);
   mkdirSync(runDir, { recursive: true });
 
+  // No write.json: the task is not a writer outcome and can be rerun on a bigger runner.
+  const excluded = excludedForDisk(task.image, task.platform);
+  if (excluded) {
+    writeFileSync(join(runDir, "report.json"), JSON.stringify(excludedReport(task, excluded), null, 2) + "\n");
+    return console.log(`${task.instance_id}: excluded_disk (needs ${gb(excluded.needed_bytes)} GB, ${gb(excluded.free_bytes)} GB free)`);
+  }
   sh(["docker", "pull", "--platform", task.platform, task.image], { timeoutMs: 60 * 60 * 1000 });
   // Everything the agent can see has an opaque name: no instance id, no PR number.
   const token = randomBytes(6).toString("hex");

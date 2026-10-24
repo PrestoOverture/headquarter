@@ -17,7 +17,7 @@ export const CAUSES = ["cheat", "misunderstanding", "other"] as const;
 export type Event = { at: string } & (
   | { type: "task.start"; task: string; goal: string; title: string; base: string; difficulty: (typeof DIFFICULTIES)[number]; model: string }
   | { type: "task.gate"; task: string; gate: Gate; result: "pass" | "fail"; claimed_done: boolean; note?: string }
-  | { type: "task.cost"; task: string; usd: number; model?: string }
+  | { type: "task.cost"; task: string; usd: number; model?: string; runs?: string[]; sessions?: string[]; source?: { path: string; sha256: string } }
   | { type: "task.lines"; task: string; added: number; deleted: number; end: string }
   | { type: "task.shelve"; task: string; why: string }
   | { type: "task.cause"; task: string; cause: (typeof CAUSES)[number]; note?: string }

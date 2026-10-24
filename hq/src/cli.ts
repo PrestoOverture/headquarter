@@ -2,10 +2,14 @@
 // hq — M0 tooling: merge lock (M0.1, D29), goal report (M0.2, D31), bookkeeping (M0.3).
 //
 //   hq goal new <name> [--title <text>] [--from <rev>]   start goal/<name> in a linked worktree <repo>.goals/<name>
+//   hq replay <task> [--as <name>]   goal/<name> (default replay-<task>) at the task's recorded base, with its acceptance criteria; records nothing
+//   hq env <task> [--release]   ports (a block of 10 from HQ_PORT_BASE), temp dir and database name for the task, as export lines; --release frees them
 //   hq status [--json]    every goal: head, ahead/behind main, report and approval state, open tasks
 //   hq report <goal>      the five-column goal report for goal/<goal>'s current commit
 //   hq approve <goal>     you, in a terminal: read the report, bind approval to that commit
-//   hq merge <goal>       merge an approved goal into main after the full tests pass
+//   hq merge <goal> [--wait <seconds>]   merge an approved goal into main after the full tests pass; one merge per repository at a time, --wait queues behind a running one
+//   hq review <goal> --task <task> [--claimed-done] [--no-record]   Codex review of the task, recorded as the codex_review gate
+//   hq trace <goal> [--check-with [<cmd>]]   every task criterion traces to a goal criterion and every goal criterion is traced; --check-with asks <cmd> (default: a fresh `claude -p`) whether each trace SERVES
 //   hq install [<rev>]    install hq/ from main (or <rev>) as the version that runs (M0.4)
 //   hq rollback           go back to the previously installed version
 //   hq version            the installed current and previous versions
@@ -15,24 +19,32 @@
 //   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>]
 //   hq task gate <task> <self_test|full_tests|codex_review|claude_diff> <pass|fail> [--claimed-done] [--note <text>]
 //   hq task cost <task> <usd> [--model <id>]
+//   hq task cost <task> --from <file> [--model <id>]   sum of total_cost_usd over the result messages (runs, by uuid) in a stream-json log or json result; recorded runs are skipped
 //   hq task lines <task> [--rev <rev>]
 //   hq task shelve <task> --why <text>
 //   hq task cause <task> <cheat|misunderstanding|other> [--note <text>]
 //   hq task false-reject <task> <gate> [--note <text>]
 //   hq escalate --goal <goal> --why <text> [--task <task>] [--minutes <n>]
 //   hq escape <task> --note <text>
+//   hq escapes            goals merged in the last 14 days that a later fix touches again (suggestions; records nothing)
 //   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>]
 
 import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { goalBranch, MAIN, validGoal, writeApproval } from "./approval";
+import { allocate, release, render as renderEnv } from "./env";
+import { escapeCandidates, render as renderEscapes } from "./escape";
 import { git, revParse } from "./git";
 import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
+import { recordCostFrom } from "./cost";
 import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { recordLines } from "./lines";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
+import { render as renderReplay, replay } from "./replay";
+import { render as renderReview, review } from "./review";
+import { DEFAULT_CHECKER, render as renderTrace, trace } from "./trace";
 import { install, installed, launcherPath, rollback } from "./versions";
 import { type Filters, filterEvents, parseDate, render, rows, stats, toCsv } from "./stats";
 import { render as renderStatus, status } from "./status";
@@ -107,6 +119,7 @@ export function record(cwd: string, args: string[]): string {
       goal: { type: "string" }, title: { type: "string" }, difficulty: { type: "string", default: "medium" },
       model: { type: "string" }, base: { type: "string" }, "claimed-done": { type: "boolean", default: false },
       note: { type: "string" }, rev: { type: "string" }, why: { type: "string" }, task: { type: "string" }, minutes: { type: "string" },
+      from: { type: "string" },
     },
   });
   const [cmd, sub, ...rest] = p;
@@ -143,6 +156,12 @@ export function record(cwd: string, args: string[]): string {
       });
       return `gate recorded for task ${task}`;
     case "cost": {
+      if (o.from !== undefined) {
+        if (rest[1] !== undefined) throw new Error("give <usd> or --from, not both");
+        const { event: e, skipped } = recordCostFrom(cwd, task, o.from, o.model);
+        return `cost recorded for task ${task}: $${e.usd.toFixed(4)}${e.model ? ` (${e.model})` : ""}` +
+          (skipped.length ? `; skipped, already recorded: ${skipped.join(", ")}` : "");
+      }
       const usd = Number(rest[1]);
       if (!(usd >= 0)) throw new Error("<usd> must be a number");
       append(cwd, { type: "task.cost", task, usd, model: o.model });
@@ -200,6 +219,21 @@ async function main(argv: string[]): Promise<number> {
       console.log(`worktree ${r.path}\nbranch ${r.branch}`);
       return 0;
     }
+    if (cmd === "replay") {
+      const usage = "usage: hq replay <task> [--as <name>]";
+      const { values: o, positionals: p } = parseArgs({ args: argv.slice(1), allowPositionals: true, options: { as: { type: "string" } } });
+      if (p.length !== 1) throw new Error(usage);
+      console.log(renderReplay(replay(cwd, p[0]!, o.as)));
+      return 0;
+    }
+    if (cmd === "env") {
+      const usage = "usage: hq env <task> [--release]";
+      const { values: o, positionals: p } = parseArgs({ args: argv.slice(1), allowPositionals: true, options: { release: { type: "boolean" } } });
+      if (p.length !== 1) throw new Error(usage);
+      if (o.release) console.log((await release(cwd, p[0]!)) ? `released the env of task ${p[0]}` : `task ${p[0]} had no env`);
+      else console.log(renderEnv(await allocate(cwd, p[0]!)));
+      return 0;
+    }
     if (cmd === "status") {
       const { values: o } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" } } });
       const goals = status(cwd);
@@ -218,7 +252,10 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (cmd === "merge" && goal) {
-      const r = merge(cwd, goal);
+      const { values: o } = parseArgs({ args: argv.slice(2), options: { wait: { type: "string" } } });
+      const wait = o.wait === undefined ? 0 : Number(o.wait);
+      if (!(wait >= 0)) throw new Error("--wait must be a number of seconds");
+      const r = merge(cwd, goal, { wait });
       if (r.testOutput) console.log(r.testOutput.trimEnd());
       if (!r.ok) {
         console.error(`not merged: ${r.reason}`);
@@ -226,9 +263,26 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log(`merged goal ${goal} into ${MAIN} as ${r.mergeCommit.slice(0, 12)}\nto take it back out: ${r.revert}`);
       for (const err of r.linesErrors) console.error(`could not measure task size: ${err}`);
+      if (r.escapes.length) console.log(renderEscapes(r.escapes));
+      if (r.escapesError) console.error(`could not look for escape candidates: ${r.escapesError}`);
       if (r.reinstalled) console.log(`hq changed: installed ${r.reinstalled.slice(0, 12)} (hq rollback to undo)`);
       if (r.reinstallError) console.error(`hq changed but reinstalling failed; still running ${installed("current")}: ${r.reinstallError}`);
       return 0;
+    }
+    if (cmd === "review" && goal) {
+      const { values: o } = parseArgs({ args: argv.slice(2), options: { task: { type: "string" }, "claimed-done": { type: "boolean" }, "no-record": { type: "boolean" } } });
+      const r = review(cwd, goal, need(o.task, "--task"), { claimedDone: o["claimed-done"], record: !o["no-record"] });
+      console.log(r.output.trimEnd());
+      console.log(renderReview(r));
+      return r.result === "pass" ? 0 : 1;
+    }
+    if (cmd === "trace" && goal) {
+      // a bare --check-with (last, or before another flag) means the default checker
+      const args = argv.slice(2).flatMap((a, i, all) => (a === "--check-with" && (all[i + 1] === undefined || all[i + 1]!.startsWith("--")) ? [a, DEFAULT_CHECKER] : [a]));
+      const { values: o } = parseArgs({ args, options: { "check-with": { type: "string" } } });
+      const t = trace(cwd, goal, { checkWith: o["check-with"] });
+      console.log(renderTrace(t));
+      return t.ok ? 0 : 1;
     }
     if (cmd === "install") {
       const c = install(cwd, goal);
@@ -253,6 +307,11 @@ async function main(argv: string[]): Promise<number> {
       if (out) process.stdout.write(out.endsWith("\n") ? out : out + "\n");
       return 0;
     }
+    if (cmd === "escapes") {
+      const found = escapeCandidates(cwd);
+      console.log(found.length ? renderEscapes(found) : "no escape candidates");
+      return 0;
+    }
     if (cmd === "task" || cmd === "escalate" || cmd === "escape") {
       console.log(record(cwd, argv));
       return 0;
@@ -261,7 +320,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq status [--json] | hq report|approve|merge <goal> | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq env <task> [--release] | hq status [--json] | hq report|approve <goal> | hq merge <goal> [--wait <seconds>] | hq review <goal> --task <task> | hq trace <goal> [--check-with [<cmd>]] | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 

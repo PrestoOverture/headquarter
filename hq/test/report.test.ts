@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { approve } from "../src/cli";
+import { noClues } from "../src/clues";
 import { git, revParse } from "../src/git";
 import { cleanTerminal, dependencyChanges, newKinds, readReportMeta, renderReport, report, sensitiveHits, writeReport } from "../src/report";
 
@@ -51,6 +52,7 @@ withSandbox("five columns from a real trial merge, and approve accepts its commi
       ".github/workflows/ci.yml": "on: push\n",
       "package.json": JSON.stringify({ dependencies: { zod: "3.26.0", leftpad: "1.3.0" } }),
       "tools/gen.py": "print(1)\n",
+      "src/net.ts": 'import { z } from "zod";\nawait fetch("/x");\n',
       "goals/x.json": JSON.stringify({ title: "Bump v", shelved: [{ task: "task 3", why: "needs a database" }], known_issues: ["flaky clock test"] }),
     },
     "task 2: CI and deps",
@@ -69,6 +71,8 @@ withSandbox("five columns from a real trial merge, and approve accepts its commi
   expect(md).toContain("package.json: - old (dependencies)");
   expect(md).toContain("新目录 tools/");
   expect(md).toContain("新文件类型 .py（tools/gen.py）");
+  expect(md).toContain('- src/net.ts:1：`import { z } from "zod";`');
+  expect(md).toContain('- src/net.ts:2：`await fetch("/x");`');
   expect(md).toContain("git revert -m 1 <合并提交>");
   expect(md).toContain("task 3：needs a database");
   expect(md).toContain("flaky clock test");
@@ -119,7 +123,7 @@ test("long test output is cut to its tail, with the full log's path", () => {
   const out = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join("\n");
   const md = renderReport({
     goal: "x", head: "a".repeat(40), base: "b".repeat(40), trialMerge: "c".repeat(40), tasks: [], testCommand: "t", testCode: 0,
-    testOut: out, testErr: "", logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
+    testOut: out, testErr: "", logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], newImports: noClues, newCalls: noClues, shelved: [], knownIssues: [],
   });
   expect(md).toContain("line 999");
   expect(md).not.toContain("line 699\n");
@@ -129,7 +133,7 @@ test("long test output is cut to its tail, with the full log's path", () => {
 function mdFor(testOut: string, testErr = "") {
   return renderReport({
     goal: "x", head: "a".repeat(40), base: "b".repeat(40), trialMerge: "c".repeat(40), tasks: [], testCommand: "t", testCode: 0,
-    testOut, testErr, logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], shelved: [], knownIssues: [],
+    testOut, testErr, logPath: "/logs/x.test.log", sensitive: [], deps: [], kinds: [], newImports: noClues, newCalls: noClues, shelved: [], knownIssues: [],
   });
 }
 const block = (md: string) => md.split("```text\n")[1]!.split("\n```")[0]!;

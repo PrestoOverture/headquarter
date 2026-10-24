@@ -32,6 +32,8 @@ denied packed_refs_write bash -c "echo '# probe' >> '$common/packed-refs'"
 
 # --- the rest of the sandbox boundary (tech_stacks.md 沙箱与安全) ---
 denied home_write touch "$HOME/sandbox-probe"
+# Codex's home holds its config.toml (approval and sandbox policy); no executor may write it.
+if [ -d "$HOME/.codex" ]; then denied codex_home_write bash -c 'echo x > "$HOME/.codex/probe"'; rm -f "$HOME/.codex/probe"; else echo "PASS codex_home_write (no ~/.codex)"; fi
 if [ -e "$HOME/.ssh" ]; then denied ssh_read ls "$HOME/.ssh"; else echo "PASS ssh_read (no ~/.ssh)"; fi
 denied net_direct curl -s --max-time 5 --noproxy '*' https://example.com
 denied net_proxy curl -sf --max-time 10 https://example.com

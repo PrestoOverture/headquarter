@@ -20,10 +20,10 @@ const PROBE = "bash scripts/sandbox/probe.sh";
 export const EXPECTED = [
   "tests", "commit", "spawn_kill", "spawn_kill_tree", "tmp_write", "local_listen",
   "hooks_write", "config_write", "main_update_ref", "main_ref_file", "packed_refs_write",
-  "home_write", "ssh_read", "net_direct", "net_proxy",
+  "home_write", "codex_home_write", "ssh_read", "net_direct", "net_proxy",
 ];
 
-function git(args: string[], cwd: string): string {
+export function git(args: string[], cwd: string): string {
   const p = Bun.spawnSync(["git", ...args], { cwd });
   if (p.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${p.stderr.toString()}`);
   return p.stdout.toString().trim();
@@ -78,7 +78,7 @@ export function verdicts(lines: string[]): Map<string, string> {
   return v;
 }
 
-function hooksSnapshot(commonDir: string): string {
+export function hooksSnapshot(commonDir: string): string {
   const dir = join(commonDir, "hooks");
   return existsSync(dir) ? readdirSync(dir).sort().join(",") : "";
 }

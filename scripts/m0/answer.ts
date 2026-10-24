@@ -35,7 +35,7 @@ const prompt = `You are working in ${wt}, a git worktree of this repository on b
 ${g.title}
 
 Acceptance criteria:
-${g.acceptance.map((a: string, i: number) => `${i + 1}. ${a}`).join("\n")}
+${g.acceptance.map((a: string | { text: string }, i: number) => `${i + 1}. ${typeof a === "string" ? a : a.text}`).join("\n")}
 
 How to work:
 - Read docs/architecture.md and the existing code under ${scope}/ first; match its style, naming, comment density and test style (${scope}/test/*.test.ts).

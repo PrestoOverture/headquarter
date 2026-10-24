@@ -18,7 +18,8 @@ export type Verdict =
   | "no_script" // patch without .step0/run_tests.sh
   | "touches_fix" // writer changed a file the gold fix changes
   | "patch_failed" // writer patch does not apply
-  | "grade_error"; // the project's rebuild timed out: says nothing about the tests
+  | "grade_error" // the project's rebuild timed out: says nothing about the tests
+  | "excluded_disk"; // the task image does not fit on the runner (disk.ts): the tests were never run
 
 /** Files a unified diff touches (the b/ side). */
 export function patchFiles(patch: string): string[] {

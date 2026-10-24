@@ -4,10 +4,10 @@
 //
 // A task is caught or a miss (every other verdict, as in summarize). Fixed: a miss in A,
 // caught in B. Broken: caught in A, a miss in B. Unchanged: the rest. Catch rates use only
-// the ids graded on both sides. An id with no report, or a grade_error, on either side is
-// listed as missing and never counted. --ids restricts the comparison to the ids in the
-// file (one per line, blank lines and # comments ignored); without it, to the ids found
-// in either directory.
+// the ids graded on both sides. An id with no report, a grade_error or an excluded_disk
+// on either side is listed as missing and never counted. --ids restricts the comparison
+// to the ids in the file (one per line, blank lines and # comments ignored); without it,
+// to the ids found in either directory.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -38,7 +38,7 @@ function readSide(dir: string): { graded: Side; present: Set<string> } {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Error(`results directory does not exist: ${dir}`);
   const { reports, missing } = readResults(dir);
   return {
-    graded: new Map(reports.filter((r) => r.verdict !== "grade_error").map((r) => [r.instance_id, r.verdict])),
+    graded: new Map(reports.filter((r) => r.verdict !== "grade_error" && r.verdict !== "excluded_disk").map((r) => [r.instance_id, r.verdict])),
     present: new Set([...reports.map((r) => r.instance_id), ...missing]),
   };
 }

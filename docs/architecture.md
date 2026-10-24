@@ -10,13 +10,21 @@
 .hq.json              合入前跑的全量测试命令；hq 从 main 读，目标分支改不了它
 hq/                   合入锁（M0.1）：hq approve / merge / install-hook，git 的 main 守卫钩子
   src/approval.ts     批准记录：~/.hq/approvals/<仓库>/，绑定一个 commit，合入后作废
-  src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main
+  src/merge.ts        合并预演（最新 main 上建合并提交、沙箱里跑全量测试），合入时移动 main；同一仓库的合入排队（$HQ_HOME/merge/<仓库>.lock，`--wait <秒>` 等前一个，默认 0 立即拒绝并报持有者 pid）；测试期间 main 动了就在新 main 上重做一次预演，再动才拒
+  src/lockfile.ts     锁文件：O_EXCL 创建、第一行写持有者 pid、持有者已不在才接管；`hq env` 和 `hq merge` 共用
   src/goal.ts         开目标（`hq goal new`）：目标分支、旁边的链接 worktree、首个提交里的 goals/<目标>.json
+  src/replay.ts       重放任务（`hq replay <任务>`）：从任务记录的基线开新目标分支和 worktree，目标文件带原目标标题、该任务的验收标准和 replay_of；只读账本，打印原任务的大小和各关卡结果
+  src/env.ts          任务环境（`hq env <任务>`）：每个任务一块 10 个连续端口（20000–29999，分配时在 127.0.0.1 上试绑，占着的块跳过）、$TMPDIR/hq-env/<仓库id>/<任务>、数据库名 hq_<仓库哈希8位>_<任务>；端口等整机共享，所有仓库的分配记在同一个 $HQ_HOME/env/allocations.json（按 仓库id+任务 索引），改动都在 O_EXCL 锁文件 allocations.lock 下做（锁里写持有者 pid，持有者已不在才接管；没有 pid 的锁超过 60 秒才算过期）；`--release` 释放
   src/status.ts       总览（`hq status`）：每个目标分支的头、领先落后、报告与批准状态、未完成任务；只读
   src/report.ts       五栏目标报告（M0.2）：~/.hq/reports/<仓库>/，按目标 commit 存
+  src/clues.ts        报告风险栏的线索：goal 新增行里 main 没 import 过的模块、新的进程或网络调用，源码和测试文件分开；正则，只是线索
   src/ledger.ts       记账（M0.3）：~/.hq/ledger/<仓库>/events.jsonl，只追加
   src/lines.ts        任务大小（200 行规则）：基线到结束 commit 的增删行数，只算文本文件，不算 goals/*.json 和锁文件
+  src/cost.ts         任务成本（`hq task cost --from`）：从 Claude Code 的 stream-json 日志或 json 结果里读 result 行的 total_cost_usd，每条 result 是一次运行（含 --resume），按 result 的 uuid 去重并求和；已记过的 uuid 跳过，没有新的就拒，没有 uuid 也拒；事件里记 uuid、会话 id（仅供参考）、文件路径和哈希
   src/stats.ts        把事件流折成每个任务一行，按测评口径算指标
+  src/escape.ts       逃逸候选：近 14 天合入的目标，被之后某个目标的修复提交再次改到（`hq escapes`，合入后也打印）；只建议，不记账
+  src/review.ts       Codex 审查作为关卡（`hq review`）：对任务基线跑 `codex review`，解析 P0–P3，P0/P1 不过；全文存 ~/.hq/reviews/<仓库>/
+  src/trace.ts        验收标准的溯源（`hq trace <目标> [--check-with [<命令>]]`）：goals/<目标>.json 顶层 `criteria` 的条目依次是 g1、g2…；任务标准写成 `{"text", "traces": "g1"}`。报告没有 trace 的任务标准、trace 指向不存在的目标标准、没有任务指向的目标标准，有就非零退出；`--check-with` 把每条 trace 的两段文字交给外部命令（默认新的 `claude -p`，在空目录里、只从 stdin 收这两段）答 SERVES 或 DOES-NOT-SERVE，DOES-NOT-SERVE、命令失败、答案不明确都算不过
   src/versions.ts     安装版本（M0.4）：~/.hq/versions/<commit>、current / previous、启动器 ~/.hq/bin/hq
   src/guard.ts        reference-transaction 钩子：main 只能移到已批准目标的合并提交
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令
@@ -24,9 +32,10 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
 eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、判卷、汇总）
   src/merge-runs.ts   把几次运行的结果合成一份，每道题取最新的判卷（`bun src/merge-runs.ts <out> <run>...`）
   src/ab.ts           两份合并结果逐题对比：修好、弄坏、不变，两边都判了的题上的抓住率（`bun src/ab.ts <a> <b> [--ids <file>]`）
+  src/disk.ts         拉镜像前的磁盘预检：镜像压缩层大小（registry manifest）× 2.5 对 Docker data root 的剩余空间，放不下判 `excluded_disk`（不进抓住率的分子分母，汇总里列出数字）；workflow 的 `runner` 输入选更大的 runner
   src/mutants.ts      变异测试：金标准补丁每次去掉一个 hunk 得一个变异体（至多 8 个）；`grade.ts --mutants` 对抓住的题逐个判，summarize 出变异得分
   src/writer_prompt_v2.md  出题提示词第二版（`write.ts --prompt v2`，默认 v1）；A/B 用法见 `ab/README.md`
-scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查
+scripts/sandbox/      M0.0：Claude Code 沙箱的前置检查；`codex-check.ts` 在 srt 里跑 `codex exec` 做同样的探测（tech_stacks 待核实）
 docs/                 设计、路线、历史
 goals/<目标>.json      目标分支上的目标文件：title、shelved（搁置的任务）、known_issues（既有问题）；报告从这里读
 ```
