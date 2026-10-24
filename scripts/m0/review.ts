@@ -33,6 +33,8 @@ const p = Bun.spawnSync(
     "claude", "-p", "--model", model, "--effort", "high", "--setting-sources", "", "--strict-mcp-config",
     "--allowedTools", "Read", "Grep", "Glob", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch",
     "--output-format", "json",
+    // M1 passes the reader's sandbox settings, so the reviewer cannot read the exam or M0's code.
+    ...(process.env.HQ_REVIEW_SETTINGS ? ["--settings", process.env.HQ_REVIEW_SETTINGS] : []),
   ],
   { cwd: wt, env, stdin: Buffer.from(prompt), timeout: 30 * 60 * 1000 },
 );

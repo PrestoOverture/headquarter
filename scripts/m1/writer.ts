@@ -54,7 +54,7 @@ Your tests must fail on this checkout with the stubs, every one of them on an as
   const r = claude(["--model", "claude-sonnet-5-5", "--effort", "high", "--settings", JSON.stringify(writerOf(task, clone)), "--permission-mode", "acceptEdits", "--add-dir", exam, "--disallowedTools", "WebFetch", "WebSearch"], prompt, clone);
   writeFileSync(join(runDir(task), `writer-${attempt}.jsonl`), r.log);
   const cost = r.result?.total_cost_usd ?? 0;
-  if (r.limited || !r.result) throw Object.assign(new Error(`writer session failed: ${r.result?.result ?? "no result"}`), { cost });
+  if (r.limited || !r.result) throw Object.assign(new Error(`writer session failed: ${r.result?.result ?? "no result"}`), { cost, result: r.result });
   const status = git(["status", "--porcelain"], clone);
   const stubCommit = git(["rev-parse", "HEAD"], clone);
   const stubFiles = stubCommit === start ? [] : git(["diff", "--name-only", `${start}..${stubCommit}`], clone).split("\n").filter(Boolean);

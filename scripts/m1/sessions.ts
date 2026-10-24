@@ -5,9 +5,14 @@
 
 import { join } from "node:path";
 import { answererSettings } from "../m0/settings";
-import { deniedReads, examDir } from "./common";
+import { deniedReads, examDir, git } from "./common";
 
-const TEST_CONFIG = [".hq.json", ".github", "goals", "bunfig.toml", "hq/package.json", "hq/bunfig.toml", "eval/package.json", "eval/bunfig.toml"];
+export const TEST_CONFIG = [".hq.json", ".github", "goals", "bunfig.toml", "hq/package.json", "hq/bunfig.toml", "eval/package.json", "eval/bunfig.toml"];
+
+/** Test configuration committed between two commits: the sandbox guards the working tree, not git plumbing (D30). */
+export function configTouched(dir: string, from: string, to: string): string[] {
+  return git(["diff", "--name-only", "--no-renames", `${from}..${to}`], dir).split("\n").filter((f) => f && TEST_CONFIG.some((c) => f === c || f.startsWith(`${c}/`)));
+}
 
 export function answererOf(task: string, cwd: string) {
   return answererSettings(join(cwd, ".git"), process.env.HOME!, deniedReads(task, { exam: true }), TEST_CONFIG.map((p) => join(cwd, p)));

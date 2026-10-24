@@ -15,7 +15,7 @@ import { claude, examDir, git, repo, runDir, sh } from "./common";
 import { falsify } from "./falsify";
 import { grade } from "./grade";
 import { criteriaOf, interfaces } from "./interfaces";
-import { answererOf } from "./sessions";
+import { answererOf, configTouched } from "./sessions";
 import { prepare } from "./workspace";
 import { write } from "./writer";
 
@@ -42,9 +42,10 @@ const finish = (result: string, extra: object = {}, code = 0) => {
   process.exit(code);
 };
 /** Records a session's cost whatever happened to it; a usage limit stops the run (resume later). */
-function spent(log: string, model: string, usd: number) {
+function spent(log: string, model: string, usd: number, result: any) {
   if (usd > 0) hqRun("task", "cost", task, String(Math.round(usd * 1e4) / 1e4), "--model", model);
-  if (/hit your (session )?limit/i.test(readFileSync(log, "utf8"))) { save(); finish("usage_limit", { log }, 6); }
+  // Only the session's final result says whether it hit the limit; the log can quote that text.
+  if (result?.is_error && /hit your (session )?limit/i.test(String(result?.result ?? ""))) { save(); finish("usage_limit", { log }, 6); }
 }
 
 // 1. The task's sanitized repository; the M1 task in the ledger.
@@ -62,9 +63,9 @@ if (!s.interfaces) {
   const log = join(out, `interfaces-${Date.now()}.jsonl`);
   try {
     const r = interfaces(dir, task, log);
-    spent(log, "claude-sonnet-5-5", r.cost);
+    spent(log, "claude-sonnet-5-5", r.cost, null);
   } catch (e: any) {
-    spent(log, "claude-sonnet-5-5", e.cost ?? 0);
+    spent(log, "claude-sonnet-5-5", e.cost ?? 0, e.result);
     throw e;
   }
   s.interfaces = git(["rev-parse", "HEAD"], dir);
@@ -74,17 +75,17 @@ if (!s.interfaces) {
 // 3. Writer: hidden tests and stubs; every test must fail first, on an assertion. One retry.
 if (!s.stubCommit) {
   let notes = "";
-  for (let attempt = (s.writerAttempts ?? 0) + 1; attempt <= 2 && !s.stubCommit; attempt++) {
-    s.writerAttempts = attempt;
-    save();
+  // An attempt counts once its session finished; one cut off by a usage limit is rerun.
+  for (let attempt = (s.writerDone ?? 0) + 1; attempt <= 2 && !s.stubCommit; attempt++) {
     let w;
     try {
       w = write(dir, task, attempt, notes);
     } catch (e: any) {
-      spent(join(out, `writer-${attempt}.jsonl`), "claude-sonnet-5-5", e.cost ?? 0);
+      spent(join(out, `writer-${attempt}.jsonl`), "claude-sonnet-5-5", e.cost ?? 0, e.result);
       throw e;
     }
-    spent(join(out, `writer-${attempt}.jsonl`), "claude-sonnet-5-5", w.cost);
+    spent(join(out, `writer-${attempt}.jsonl`), "claude-sonnet-5-5", w.cost, null);
+    s.writerDone = attempt;
     const problems = [...w.problems];
     let first;
     if (!problems.length) {
@@ -138,7 +139,7 @@ How to work:
   const log = join(out, `answer-${n}.jsonl`);
   const r = claude(["--model", ANSWERER, "--effort", "high", "--settings", JSON.stringify(answererOf(task, dir)), "--permission-mode", "acceptEdits", "--disallowedTools", "WebFetch", "WebSearch"], prompt, dir);
   writeFileSync(log, r.log);
-  spent(log, ANSWERER, r.result?.total_cost_usd ?? 0);
+  spent(log, ANSWERER, r.result?.total_cost_usd ?? 0, r.result);
   if (!r.result || r.result.is_error) {
     s.answers.push({ n, error: String(r.result?.result ?? "no result").slice(0, 500) });
     save();
@@ -146,6 +147,16 @@ How to work:
   }
   hqRun("task", "gate", task, "self_test", "pass", "--claimed-done", "--note", `answer ${n}`);
   const head = git(["rev-parse", "HEAD"], dir);
+  // D30 holds in git too: an answer that commits test configuration or goal files (for example by
+  // git plumbing, past the working-tree sandbox) is not graded.
+  const touched = configTouched(dir, s.stubCommit, head);
+  if (touched.length) {
+    s.answers.push({ n, head, passed: false, configTouched: touched });
+    save();
+    hqRun("task", "gate", task, "hidden_tests", "fail", "--claimed-done", "--note", `answer ${n}: commits test configuration ${touched.join(", ")}; not graded (D30)`);
+    notes = `Your answer was not graded: it changes ${touched.join(", ")}, which you may not change. Take those changes out (a new commit) and keep to the task.`;
+    continue;
+  }
   const gr = await grade(task, dir, head);
   s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, log: gr.log, feedback: gr.feedback });
   save();

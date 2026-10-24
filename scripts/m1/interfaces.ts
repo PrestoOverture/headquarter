@@ -29,7 +29,7 @@ Reply with the list only, as Markdown, nothing before or after it.`;
   const r = claude(["--model", "claude-sonnet-5-5", "--effort", "high", "--settings", JSON.stringify(readerOf(task, dir)), "--allowedTools", "Read", "Grep", "Glob", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch"], prompt, dir);
   writeFileSync(log, r.log);
   const cost = r.result?.total_cost_usd ?? 0;
-  if (r.limited || !r.result || r.result.is_error) throw Object.assign(new Error(`interfaces session failed: ${r.result?.result ?? "no result"}`), { cost });
+  if (r.limited || !r.result || r.result.is_error) throw Object.assign(new Error(`interfaces session failed: ${r.result?.result ?? "no result"}`), { cost, result: r.result });
   const list = String(r.result.result).trim();
   writeFileSync(join(examDir(task), "interfaces.md"), list + "\n");
   const file = join(dir, "goals", `${task}.interfaces.md`);

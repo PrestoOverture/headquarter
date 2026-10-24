@@ -31,6 +31,13 @@ export const writersDir = () => {
   return d;
 };
 
+/** Graders' scratch worktrees and configuration: under M1_HOME, not in a session's temp directory (deniedReads). */
+export const scratchDir = () => {
+  const d = join(M1_HOME, "scratch");
+  mkdirSync(d, { recursive: true });
+  return d;
+};
+
 export function hqHome(): string {
   return process.env.HQ_HOME ?? join(homedir(), ".hq");
 }
@@ -46,9 +53,15 @@ export function deniedReads(task: string, opts: { exam: boolean }): string[] {
   const home = homedir();
   const others = (kind: string) =>
     existsSync(join(M1_HOME, kind)) ? readdirSync(join(M1_HOME, kind)).filter((t) => t !== task).map((t) => join(M1_HOME, kind, t)) : [];
+  // Claude Code's per-session temp directories: the sandbox's own $TMPDIR lives here too, so only
+  // the ones of sessions that worked on this repository (M0's) or on other M1 tasks are denied.
+  const tmpRoot = `/private/tmp/claude-${process.getuid!()}`;
+  const tmps = existsSync(tmpRoot)
+    ? readdirSync(tmpRoot).filter((d) => d.includes("projects-headquarter") || (d.includes("hq-m1") && !d.endsWith(`repos-${task}`))).map((d) => join(tmpRoot, d))
+    : [];
   return [
-    repo, `${repo}.goals`, hqHome(), join(home, ".claude", "projects"), join(home, ".codex", "sessions"),
-    "/private/tmp/claude-501", join(M1_HOME, "runs"), ...others("repos"),
+    repo, `${repo}.goals`, hqHome(), join(home, ".claude", "projects"), join(home, ".claude", "file-history"), join(home, ".claude", "todos"),
+    join(home, ".codex", "sessions"), join(home, ".codex", "archived_sessions"), ...tmps, join(M1_HOME, "runs"), ...others("repos"),
     ...(opts.exam ? [join(M1_HOME, "exams"), join(M1_HOME, "writers")] : others("exams")),
   ];
 }
@@ -97,6 +110,12 @@ export function summary(output: string): { pass: number; fail: number } {
   for (const m of output.matchAll(/^\s*(\d+) pass\s*$/gm)) pass += Number(m[1]);
   for (const m of output.matchAll(/^\s*(\d+) fail\s*$/gm)) fail += Number(m[1]);
   return { pass, fail };
+}
+
+/** The names of the failing tests, sorted: two runs of the same code must agree on them (D36). */
+export function failing(output: string): string[] {
+  const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
+  return [...clean.matchAll(/^\(fail\) (.*?)(?: \[[\d.]+m?s\])?\s*$/gm)].map((m) => m[1]!).sort();
 }
 
 /**
