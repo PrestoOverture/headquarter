@@ -43,6 +43,15 @@ test("feedback keeps test names and assertion messages, never test code, the exa
   expect(f).not.toContain("m1-t02.test.ts");
 });
 
+test("feedback drops lines carrying the hidden test code, whatever the code under test returned", () => {
+  const line = `expect(statusOf(ledger)).toContain("goal/x  ");`;
+  const run = `error: expect(received).toBe(expected)\nExpected: "ok"\nReceived: "test(() => {\\n  ${line}"\n(fail) lists [1ms]`;
+  const f = feedback(run, [], [`test("lists", () => {\n  ${line}\n});\n`]);
+  expect(f).toContain("(fail) lists");
+  expect(f).toContain('Expected: "ok"');
+  expect(f).not.toContain("statusOf");
+});
+
 test("feedback strips color codes and caps its length", () => {
   expect(feedback("\x1b[31m(fail)\x1b[0m colored [1ms]")).toBe("(fail) colored [1ms]");
   expect(feedback(Array.from({ length: 500 }, (_, i) => `(fail) t${i}`).join("\n")).split("\n")).toHaveLength(200);
@@ -50,7 +59,7 @@ test("feedback strips color codes and caps its length", () => {
 });
 
 test("summary adds up every bun test summary in the output", () => {
-  expect(summary(ASSERTION_RUN)).toEqual({ pass: 0, fail: 1 });
-  expect(summary(" 3 pass\n 0 fail\n...\n 2 pass\n 1 fail")).toEqual({ pass: 5, fail: 1 });
-  expect(summary("exit 0, no tests ran")).toEqual({ pass: 0, fail: 0 });
+  expect(summary(ASSERTION_RUN)).toEqual({ pass: 0, fail: 1, skip: 0 });
+  expect(summary(" 3 pass\n 0 fail\n...\n 2 pass\n 1 skip\n 1 todo\n 1 fail")).toEqual({ pass: 5, fail: 1, skip: 2 });
+  expect(summary("exit 0, no tests ran")).toEqual({ pass: 0, fail: 0, skip: 0 });
 });

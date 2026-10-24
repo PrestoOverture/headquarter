@@ -7,7 +7,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { claude, examDir, git, runDir, sh, writersDir } from "./common";
 import { criteriaOf } from "./interfaces";
-import { writerOf } from "./sessions";
+import { configTouched, writerOf } from "./sessions";
 
 export const TEST_PATH = /(^|\/)(test|tests|__tests__)\/|\.test\.[cm]?[jt]sx?$/;
 
@@ -47,7 +47,7 @@ ${ifaces}
 
 Write:
 1. Hidden tests in ${exam}/files/, laid out at the repository-relative paths they run from (for example ${exam}/files/hq/test/m1-${task}.test.ts). Use bun test and the repository's existing test style. At least one assertion per acceptance criterion; assert the business result the criterion describes, not implementation details; no smoke tests. Name the files m1-*.test.ts.
-2. ${exam}/run.sh: a bash script that, run from the repository root, runs only your tests (\`bun test --timeout 30000 <paths>\`, one call) and exits 0 only if all of them pass.
+2. ${exam}/run.sh: a bash script that, run from the repository root, runs only your tests (\`bun test --timeout 30000 <paths>\`, one call, from the repository root) and exits 0 only if all of them pass. The grader runs them in a sandbox with SANDBOX_RUNTIME=1 set: none of your tests may skip itself there.
 3. Stubs: for every interface marked new, the smallest code in this checkout that makes it exist with the listed name and signature but no behavior (functions that throw or return a placeholder, a command that exits with an error). Commit the stubs on the current branch. Do not implement the task, and commit no test files.
 
 Your tests must fail on this checkout with the stubs, every one of them on an assertion (\`expect(...)\`), not because something is missing, does not compile, throws or times out: a stub that throws makes a test crash, so wrap such calls so the test asserts on the outcome. Check with \`bash ${exam}/try.sh\` until every test fails on an assertion. When done, reply with one line per test: its name and the criterion it covers.${notes ? `\n\n${notes}` : ""}`;
@@ -64,6 +64,7 @@ Your tests must fail on this checkout with the stubs, every one of them on an as
     ...(files.some((f) => TEST_PATH.test(f)) ? [] : ["no test files in the exam"]),
     ...stubFiles.filter((f) => TEST_PATH.test(f)).map((f) => `the stub commit contains a test file: ${f}`),
     ...(Number(git(["rev-list", "--count", `${start}..${stubCommit}`], clone)) > 1 ? ["more than one stub commit"] : []),
+    ...(stubCommit === start ? [] : configTouched(clone, start, stubCommit).map((f) => `the stub commit changes ${f}, which no session may change`)),
     ...(status ? [`uncommitted changes left in the writer's checkout:\n${status}`] : []),
   ];
   return { clone, stubCommit, stubFiles, problems, cost, reply: String(r.result.result ?? "") };

@@ -92,7 +92,9 @@ if (!s.stubCommit) {
       first = await grade(task, w.clone, w.stubCommit, Infinity);
       if (first.flaky) problems.push("the tests are flaky on the stubs");
       else if (first.tests.pass > 0) problems.push(`${first.tests.pass} tests pass on the stubs`);
+      else if (first.tests.skip > 0) problems.push(`${first.tests.skip} tests are skipped in the grader (SANDBOX_RUNTIME=1 is set there): no test may skip itself`);
       else if (first.kind !== "assertion") problems.push("tests fail, but not all on assertions (a missing export, a compile error, a throw or a timeout): fix the stubs or wrap the calls so every test fails on an expect");
+      else if (first.sealed !== first.tests.fail) problems.push("the grader could not see your tests run: run.sh must run bun test from the repository root, once");
     }
     if (!problems.length) {
       git(["fetch", "-q", w.clone, w.stubCommit], dir); // only the stub commit enters the answerer's repository
@@ -158,13 +160,13 @@ How to work:
     continue;
   }
   const gr = await grade(task, dir, head);
-  s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, log: gr.log, feedback: gr.feedback });
+  s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, sealed: gr.sealed, suspect: gr.suspect, log: gr.log, feedback: gr.feedback });
   save();
   if (gr.flaky) {
     hqRun("task", "gate", task, "hidden_tests", "fail", "--note", `answer ${n}: hidden tests flaky on the same code (D36): back to the writer`);
     finish("flaky", { log: gr.log }, 4);
   }
-  hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}`);
+  hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}${gr.sealed !== gr.tests.pass + gr.tests.fail ? `, seal counted ${gr.sealed}` : ""}${gr.suspect ? ", output carries hidden test code" : ""}`);
   if (gr.passed) {
     const f = await falsify(task, dir, s.stubCommit, head);
     hqRun("task", "gate", task, "falsify", f.ok ? "pass" : "fail", "--note", f.ok ? `reverted ${f.reverted.length} files: all hidden tests fail on assertions` : f.reason);
@@ -173,6 +175,7 @@ How to work:
     if (!f.ok) finish("falsify_failed", { head, reason: f.reason, log: f.log }, 7);
     finish("passed", { head, answers: n, dir, base: git(["rev-list", "--max-parents=0", "HEAD"], dir) });
   }
-  notes = `Hidden tests failed on your answer (${gr.tests.pass} pass, ${gr.tests.fail} fail):\n${gr.feedback}`;
+  // No totals: the answerer gets which tests failed and why, not the size of the exam.
+  notes = `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${gr.feedback}`;
 }
 finish("out_of_answers", { answers: s.answers.length }, 5);

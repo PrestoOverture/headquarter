@@ -7,10 +7,10 @@
 //
 //   bun scripts/m1/review-gates.ts <m0-task> <round> [<focus-notes>]
 
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, existsSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git, repo, repoDir, runDir, sh } from "./common";
+import { inScratch } from "./grade";
 import { readerOf } from "./sessions";
 
 const [m0, round, focus] = process.argv.slice(2);
@@ -28,19 +28,11 @@ async function bg(cmd: string[], cwd: string, env: Record<string, string> = {}) 
   return { code: await p.exited, out: o + e };
 }
 
-async function fullTests() {
-  const scratch = mkdtempSync(join(tmpdir(), `m1-full-${task}-`));
-  try {
-    git(["worktree", "add", "--detach", "-q", scratch, head], dir);
-    for (const d of ["hq", "eval"]) if (existsSync(join(dir, d, "node_modules")) && existsSync(join(scratch, d))) symlinkSync(join(dir, d, "node_modules"), join(scratch, d, "node_modules"));
-    const cmd = JSON.parse(git(["show", "main:.hq.json"], dir)).test; // the starting point's, not the answer's
-    const { sandboxed } = await import(join(repo, "hq/src/sandbox.ts"));
-    const r = sandboxed(cmd, scratch, { writable: [scratch], commonDir: join(dir, ".git") });
-    return { code: r.code as number, out: (r.out + r.err) as string };
-  } finally {
-    sh(["git", "worktree", "remove", "--force", scratch], dir);
-    rmSync(scratch, { recursive: true, force: true });
-  }
+// The answer's own code and tests run here, so under the grader's sandbox: M1's read denies,
+// writes only to the scratch worktree.
+function fullTests() {
+  const cmd = JSON.parse(git(["show", "main:.hq.json"], dir)).test; // the starting point's, not the answer's
+  return inScratch(task, dir, head, ({ run }) => run(cmd));
 }
 
 const [full, codex, claude] = await Promise.all([
@@ -53,6 +45,7 @@ writeFileSync(`${stem}-codex.txt`, codex.out);
 const review = JSON.parse(readFileSync(`${stem}-review.json`, "utf8") || "{}");
 const verdict = /VERDICT: (PASS|FAIL)\s*$/.exec(review.result ?? "")?.[1] ?? "NONE";
 const codexLines = codex.out.split("\n").filter((l) => l.trim());
+if (review.total_cost_usd > 0) sh([join(process.env.HOME!, ".hq/bin/hq"), "task", "cost", task, String(Math.round(review.total_cost_usd * 1e4) / 1e4), "--model", "claude-opus-5-5"], repo);
 console.log(JSON.stringify({ task, round, head: head.slice(0, 12), full_tests_exit: full.code, claude_verdict: verdict, claude_cost: review.total_cost_usd, size: git(["diff", "--shortstat", `${base}..${head}`], dir) }, null, 2));
 console.log("--- codex\n" + codexLines.slice(codexLines.lastIndexOf("codex") + 1).slice(0, 8).join("\n").slice(0, 1500));
 console.log("--- claude 重要\n" + ((review.result ?? "").split("\n").filter((l: string) => l.includes("重要") && !l.includes("No 重要")).slice(0, 6).join("\n").slice(0, 2000) || "(none)"));

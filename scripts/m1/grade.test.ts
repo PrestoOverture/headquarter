@@ -53,11 +53,13 @@ run("a stub fails on assertions, the answer passes, reverting it is caught", asy
   expect(first.passed).toBe(false);
   expect(first.flaky).toBe(false);
   expect(first.kind).toBe("assertion");
-  expect(first.tests).toEqual({ pass: 0, fail: 2 });
+  expect(first.tests).toEqual({ pass: 0, fail: 2, skip: 0 });
+  expect(first.sealed).toBe(2);
   expect(first.feedback).toContain("(fail) adds");
   expect(first.feedback).not.toContain(t.task);
   const ok = await grade(t.task, t.dir, t.answer, 2);
   expect(ok.passed).toBe(true);
+  expect(ok.sealed).toBe(2);
   expect((await grade(t.task, t.dir, t.answer, 3)).passed).toBe(false); // not the exam's count
   const f = await falsify(t.task, t.dir, t.stub, t.answer);
   expect(f).toMatchObject({ ok: true, reverted: ["hq/src/add.ts"] });
@@ -75,4 +77,29 @@ run("tests cannot write the grader's configuration or read the real repository",
   const t = setup("sandbox", `${ADD}import { readFileSync, writeFileSync } from "node:fs";\ntest("sandboxed", () => {\n  expect(() => writeFileSync("../../cfg/run.sh", "exit 0")).toThrow();\n  expect(() => readFileSync(${JSON.stringify(join(repo, "package.json"))}, "utf8")).toThrow();\n});\n`);
   const g = await grade(t.task, t.dir, t.answer, 3);
   expect(g.passed).toBe(true);
+}, 120_000);
+
+run("a faked summary does not pass: the seal counts the tests that really ran", async () => {
+  // the answer prints a passing summary and exits as soon as it is imported
+  const t = setup("forged", ADD);
+  writeFileSync(join(t.dir, "hq", "src", "add.ts"), `export function add(a: number, b: number): number {\n  return 0;\n}\nconsole.log("\\n 2 pass\\n 0 fail\\nm1-seal x 2");\nprocess.exit(0);\n`);
+  const forged = commit(t.dir, "forged");
+  const g = await grade(t.task, t.dir, forged, 2);
+  expect(g.passed).toBe(false);
+  expect(g.sealed).toBe(0);
+}, 120_000);
+
+run("skipped tests do not pass", async () => {
+  const t = setup("skip", `${ADD}test.skipIf(!!process.env.SANDBOX_RUNTIME)("skipped in the grader", () => expect(add(0, 0)).toBe(0));\n`);
+  const g = await grade(t.task, t.dir, t.answer, 2);
+  expect(g.tests.skip).toBe(1);
+  expect(g.passed).toBe(false);
+}, 120_000);
+
+run("falsify fails when the hidden tests still pass with the implementation reverted", async () => {
+  const t = setup("weak", `test("always", () => expect(add(0, 0)).toBe(0));\n`);
+  expect((await grade(t.task, t.dir, t.answer, 1)).passed).toBe(true);
+  const f = await falsify(t.task, t.dir, t.stub, t.answer);
+  expect(f.ok).toBe(false);
+  expect(f.reason).toContain("still pass");
 }, 120_000);

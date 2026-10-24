@@ -6,7 +6,7 @@
 // paths they run from, run.sh runs them from the repository root, interfaces.md is the interface
 // list, count is the number of hidden tests. Run state and logs go to ~/.hq-m1/runs/<task>/.
 
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -17,6 +17,11 @@ const dir = (kind: string, task: string) => {
   mkdirSync(d, { recursive: true });
   return d;
 };
+/**
+ * Each M1 session's own temp directory goes under here, not under M1_HOME: Claude Code ignores a
+ * CLAUDE_CODE_TMPDIR longer than about 32 characters and falls back to the shared temp root.
+ */
+export const TMP_ROOT = join(homedir(), ".hq-m1t");
 export const repoDir = (task: string) => join(M1_HOME, "repos", task);
 export const examDir = (task: string) => {
   const d = dir("exams", task);
@@ -45,30 +50,28 @@ export function hqHome(): string {
 /**
  * What no M1 session (interfaces, writer, answerer) may read: anything that shows M0's work or
  * another task's exam. The real repository and its goal worktrees, the installed hq and its
- * ledger, Claude's and Codex's own session records, this orchestrator's scratchpad, the M1 run
- * logs, and the other tasks' repositories and exams. `exam` adds every exam, the task's own too
- * (the answerer); without it the task's own exam stays readable (the writer).
+ * ledger, Claude's and Codex's own session records and file history, the shared Claude Code temp
+ * root (M0 sessions left files there), the temp directories of earlier M1 sessions, the graders'
+ * scratch, the M1 run logs, and the other tasks' repositories and exams. `exam` adds every exam,
+ * the task's own too (the answerer); without it the task's own exam stays readable (the writer).
+ * Each M1 session gets a new temp directory of its own (claude() below), made after this list.
  */
-export function deniedReads(task: string, opts: { exam: boolean }): string[] {
+export function deniedReads(task: string, opts: { exam: boolean; scratch?: boolean }): string[] {
   const home = homedir();
-  const others = (kind: string) =>
-    existsSync(join(M1_HOME, kind)) ? readdirSync(join(M1_HOME, kind)).filter((t) => t !== task).map((t) => join(M1_HOME, kind, t)) : [];
-  // Claude Code's per-session temp directories: the sandbox's own $TMPDIR lives here too, so only
-  // the ones of sessions that worked on this repository (M0's) or on other M1 tasks are denied.
-  const tmpRoot = `/private/tmp/claude-${process.getuid!()}`;
-  const tmps = existsSync(tmpRoot)
-    ? readdirSync(tmpRoot).filter((d) => d.includes("projects-headquarter") || (d.includes("hq-m1") && !d.endsWith(`repos-${task}`))).map((d) => join(tmpRoot, d))
-    : [];
+  const all = (kind: string) => (existsSync(join(M1_HOME, kind)) ? readdirSync(join(M1_HOME, kind)).map((t) => join(M1_HOME, kind, t)) : []);
+  const others = (kind: string) => all(kind).filter((d) => !d.endsWith(`/${task}`));
   return [
     repo, `${repo}.goals`, hqHome(), join(home, ".claude", "projects"), join(home, ".claude", "file-history"), join(home, ".claude", "todos"),
-    join(home, ".codex", "sessions"), join(home, ".codex", "archived_sessions"), ...tmps, join(M1_HOME, "runs"), ...others("repos"),
+    join(home, ".codex", "sessions"), join(home, ".codex", "archived_sessions"), `/private/tmp/claude-${process.getuid!()}`,
+    ...(existsSync(TMP_ROOT) ? readdirSync(TMP_ROOT).map((d) => join(TMP_ROOT, d)) : []), ...(opts.scratch === false ? [] : [join(M1_HOME, "scratch")]), join(M1_HOME, "runs"), ...others("repos"),
     ...(opts.exam ? [join(M1_HOME, "exams"), join(M1_HOME, "writers")] : others("exams")),
   ];
 }
 
-export function sh(cmd: string[], cwd: string, env?: Record<string, string>) {
-  const p = Bun.spawnSync(cmd, { cwd, env: { ...process.env, ...env }, stdin: "ignore" });
-  return { code: p.exitCode ?? -1, out: p.stdout.toString() + p.stderr.toString() };
+export function sh(cmd: string[], cwd: string, env?: Record<string, string>, timeoutMs?: number) {
+  const p = Bun.spawnSync(cmd, { cwd, env: { ...process.env, ...env }, stdin: "ignore", ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {}) });
+  const timedOut = p.exitCode === null && !!timeoutMs;
+  return { code: p.exitCode ?? -1, out: p.stdout.toString() + p.stderr.toString() + (timedOut ? `\nm1: killed after ${timeoutMs! / 1000}s\n` : ""), timedOut };
 }
 
 export function git(args: string[], cwd: string): string {
@@ -84,11 +87,15 @@ export function claudeEnv(): Record<string, string> {
   return env;
 }
 
-/** Runs `claude -p` with the prompt on stdin; returns the stream-json log and its result. */
+/** Runs `claude -p` with the prompt on stdin, in a temp directory of its own; returns the stream-json log and its result. */
 export function claude(args: string[], prompt: string, cwd: string, timeoutMs = 60 * 60 * 1000) {
+  mkdirSync(TMP_ROOT, { recursive: true });
+  const tmp = mkdtempSync(join(TMP_ROOT, "/"));
+  if (tmp.length > 32) throw new Error(`session temp directory ${tmp} is too long for Claude Code (32 characters at most)`);
   const p = Bun.spawnSync(["claude", "-p", "--output-format", "stream-json", "--verbose", "--setting-sources", "", "--strict-mcp-config", ...args], {
-    cwd, env: claudeEnv(), stdin: Buffer.from(prompt), timeout: timeoutMs,
+    cwd, env: { ...claudeEnv(), CLAUDE_CODE_TMPDIR: tmp }, stdin: Buffer.from(prompt), timeout: timeoutMs,
   });
+  rmSync(tmp, { recursive: true, force: true });
   const log = p.stdout.toString();
   let result: any = null;
   for (const l of log.split("\n")) {
@@ -97,7 +104,7 @@ export function claude(args: string[], prompt: string, cwd: string, timeoutMs = 
       if (m.type === "result") result = m;
     } catch {}
   }
-  return { log, result, limited: /hit your (session )?limit/i.test(result?.result ?? "") };
+  return { log, result, limited: !!result?.is_error && /hit your (session )?limit/i.test(result?.result ?? "") };
 }
 
 // ---------- Bun test output ----------
@@ -105,11 +112,12 @@ export function claude(args: string[], prompt: string, cwd: string, timeoutMs = 
 const CRASH = /Cannot find module|Cannot find package|SyntaxError|is not a function|is not a constructor|is not defined|Export named .* not found|ReferenceError|Unexpected token|Could not resolve|timed out/;
 
 /** Counts from every `bun test` summary in the output (a run.sh may call bun test more than once). */
-export function summary(output: string): { pass: number; fail: number } {
-  let pass = 0, fail = 0;
+export function summary(output: string): { pass: number; fail: number; skip: number } {
+  let pass = 0, fail = 0, skip = 0;
   for (const m of output.matchAll(/^\s*(\d+) pass\s*$/gm)) pass += Number(m[1]);
   for (const m of output.matchAll(/^\s*(\d+) fail\s*$/gm)) fail += Number(m[1]);
-  return { pass, fail };
+  for (const m of output.matchAll(/^\s*(\d+) (?:skip|todo)\s*$/gm)) skip += Number(m[1]);
+  return { pass, fail, skip };
 }
 
 /** The names of the failing tests, sorted: two runs of the same code must agree on them (D36). */
@@ -132,18 +140,25 @@ export function failureKind(output: string): "assertion" | "other" {
   return "assertion";
 }
 
+/** Lines of the hidden tests long enough that seeing one in the output means test code got out. */
+export function sourceLines(sources: string[]): string[] {
+  return [...new Set(sources.flatMap((s) => s.split("\n").map((l) => l.trim()).filter((l) => l.length >= 20)))];
+}
+
 /**
  * What the answerer may see of a failing hidden-test run: the names of the failing tests and
- * the assertion messages, never the test code: source excerpts, stack frames, the exam's path and
- * the hidden test files' names are dropped.
+ * the assertion messages, never the test code: source excerpts, stack frames, the exam's path,
+ * the hidden test files' names and any line carrying a line of the hidden tests (values the code
+ * under test chose, such as a Received: holding a test file it read) are dropped.
  */
-export function feedback(output: string, hiddenFiles: string[] = []): string {
+export function feedback(output: string, hiddenFiles: string[] = [], sources: string[] = []): string {
   const names = hiddenFiles.map((f) => f.split("/").pop()!).filter(Boolean);
+  const lines = sourceLines(sources);
   const keep: string[] = [];
   for (const raw of output.split("\n")) {
     const l = raw.replace(/\x1b\[[0-9;]*m/g, "");
     if (/^\s*\d+\s*\|/.test(l) || /^\s*at\s/.test(l)) continue; // source excerpt, stack frame
-    if (l.includes("/.hq-m1/") || names.some((n) => l.includes(n))) continue;
+    if (l.includes("/.hq-m1/") || l.includes(M1_HOME) || names.some((n) => l.includes(n)) || lines.some((s) => l.includes(s))) continue;
     if (/^\(fail\)|^error:|^\s*Expected|^\s*Received|^\s*[-+] /.test(l)) keep.push(l.trimEnd().slice(0, 400));
   }
   return keep.slice(0, 200).join("\n");
