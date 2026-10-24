@@ -1,23 +1,27 @@
-// M1 for one task, from its M0 starting point (roadmap M1 实施计划): replay → interface list →
-// writer (hidden tests + stubs, fails-first check) → answerer, judged by the hidden tests, at
-// most 3 answers (D43) → falsifiability check. Records every gate and cost in the ledger under
-// arm m1. The two reviews and the report come after, as in M0 (scripts/m0/gates.ts).
+// M1 for one task, from its M0 starting point (roadmap M1 实施计划): sanitized repository →
+// interface list → writer (hidden tests + stubs, fails-first on assertions) → answers judged by
+// the hidden tests, at most 3 in all (D43) → falsifiability check. Every gate and every session's
+// cost goes into the ledger under arm m1, including sessions that fail. The two reviews and the
+// full tests come after, as in M0 (scripts/m1/review-gates.ts).
 //
-//   bun scripts/m1/run-task.ts <m0-task> [--answers-left N] [--notes <file>]
-// Resumable: an existing replay worktree and exam are reused; --notes passes review findings
-// into the next answer (a rework round).
+//   bun scripts/m1/run-task.ts <m0-task> [--notes <file>]
+// Resumable from ~/.hq-m1/runs/m1-<task>/state.json; --notes passes review findings into the next
+// answer (a rework round, which counts toward the 3).
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { examDir, git, hqHome, repo, sh } from "./common";
+import { claude, examDir, git, repo, runDir, sh } from "./common";
 import { falsify } from "./falsify";
 import { grade } from "./grade";
-import { interfaces } from "./interfaces";
+import { criteriaOf, interfaces } from "./interfaces";
+import { answererOf } from "./sessions";
+import { prepare } from "./workspace";
 import { write } from "./writer";
 
-const hq = join(process.env.HOME!, ".hq/bin/hq");
+const MAX_ANSWERS = 3; // D43
 const ANSWERER = "claude-sonnet-5-5";
+const hq = join(process.env.HOME!, ".hq/bin/hq");
 
 function hqRun(...args: string[]) {
   const r = sh([hq, ...args], repo);
@@ -25,107 +29,139 @@ function hqRun(...args: string[]) {
   return r.out.trim();
 }
 
-const { values: o, positionals } = parseArgs({ allowPositionals: true, options: { "answers-left": { type: "string", default: "3" }, notes: { type: "string" } } });
+const { values: o, positionals } = parseArgs({ allowPositionals: true, options: { notes: { type: "string" } } });
 const m0 = positionals[0];
-if (!m0) throw new Error("usage: run-task.ts <m0-task> [--answers-left N] [--notes <file>]");
+if (!m0) throw new Error("usage: run-task.ts <m0-task> [--notes <file>]");
 const task = `m1-${m0}`;
-const out = join(hqHome(), "m1-runs", task);
-mkdirSync(out, { recursive: true });
-const state = join(out, "state.json");
-const s: any = existsSync(state) ? JSON.parse(readFileSync(state, "utf8")) : {};
-const save = () => writeFileSync(state, JSON.stringify(s, null, 2) + "\n");
-const exam = await examDir(task);
+const out = runDir(task);
+const stateFile = join(out, "state.json");
+const s: any = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : { answers: [] };
+const save = () => writeFileSync(stateFile, JSON.stringify(s, null, 2) + "\n");
+const finish = (result: string, extra: object = {}, code = 0) => {
+  console.log(JSON.stringify({ task, result, ...extra }));
+  process.exit(code);
+};
+/** Records a session's cost whatever happened to it; a usage limit stops the run (resume later). */
+function spent(log: string, model: string, usd: number) {
+  if (usd > 0) hqRun("task", "cost", task, String(Math.round(usd * 1e4) / 1e4), "--model", model);
+  if (/hit your (session )?limit/i.test(readFileSync(log, "utf8"))) { save(); finish("usage_limit", { log }, 6); }
+}
 
-// 1. Replay the M0 task's starting point; start the M1 task in the ledger.
-if (!s.worktree) {
-  const row = hqRun("stats", "--tasks").split("\n").map((l) => JSON.parse(l)).find((r) => r.task === m0);
+// 1. The task's sanitized repository; the M1 task in the ledger.
+if (!s.dir) {
+  const row = hqRun("stats", "--tasks", "--arm", "m0").split("\n").map((l) => JSON.parse(l)).find((r) => r.task === m0);
   if (!row) throw new Error(`no M0 task ${m0} in the ledger`);
-  const replay = hqRun("replay", m0, "--as", task);
-  s.worktree = /^worktree (.+)$/m.exec(replay)![1];
-  s.base = /^base (\S+)$/m.exec(replay)![1];
-  hqRun("task", "start", task, "--goal", task, "--title", row.title, "--difficulty", row.difficulty, "--model", ANSWERER, "--arm", "m1", "--base", s.base);
+  s.dir = prepare(task, m0, row.base, row.goal);
+  hqRun("task", "start", task, "--goal", task, "--title", row.title, "--difficulty", row.difficulty, "--model", ANSWERER, "--arm", "m1", "--base", row.base);
   save();
 }
-const wt: string = s.worktree;
-const cost = (file: string, model: string) => { try { hqRun("task", "cost", task, "--from", file, "--model", model); } catch (e) { console.error(`cost not recorded: ${(e as Error).message}`); } };
+const dir: string = s.dir;
 
-// 2. Interface list, by a session that never saw M0's code.
+// 2. Interface list, by a session that cannot see M0's code.
 if (!s.interfaces) {
-  await interfaces(wt, task, task, join(out, "interfaces.jsonl"));
-  cost(join(out, "interfaces.jsonl"), "claude-sonnet-5-5");
-  s.interfaces = git(["rev-parse", "HEAD"], wt);
+  const log = join(out, `interfaces-${Date.now()}.jsonl`);
+  try {
+    const r = interfaces(dir, task, log);
+    spent(log, "claude-sonnet-5-5", r.cost);
+  } catch (e: any) {
+    spent(log, "claude-sonnet-5-5", e.cost ?? 0);
+    throw e;
+  }
+  s.interfaces = git(["rev-parse", "HEAD"], dir);
   save();
 }
 
-// 3. Writer: hidden tests and stubs; they must fail first, on assertions. One retry.
+// 3. Writer: hidden tests and stubs; every test must fail first, on an assertion. One retry.
 if (!s.stubCommit) {
   let notes = "";
-  for (let attempt = 1; attempt <= 2 && !s.stubCommit; attempt++) {
-    const log = join(out, `writer-${attempt}.jsonl`);
-    const w = await write(wt, task, task, log, notes);
-    cost(log, "claude-sonnet-5-5");
-    const first = w.problems.length ? null : await grade(task, w.stubCommit);
-    const failsFirst = first && !first.passed && !first.flaky && first.kind === "assertion";
-    if (!w.problems.length && failsFirst) {
-      git(["merge", "--ff-only", "-q", w.stubCommit], wt);
+  for (let attempt = (s.writerAttempts ?? 0) + 1; attempt <= 2 && !s.stubCommit; attempt++) {
+    s.writerAttempts = attempt;
+    save();
+    let w;
+    try {
+      w = write(dir, task, attempt, notes);
+    } catch (e: any) {
+      spent(join(out, `writer-${attempt}.jsonl`), "claude-sonnet-5-5", e.cost ?? 0);
+      throw e;
+    }
+    spent(join(out, `writer-${attempt}.jsonl`), "claude-sonnet-5-5", w.cost);
+    const problems = [...w.problems];
+    let first;
+    if (!problems.length) {
+      first = await grade(task, w.clone, w.stubCommit, Infinity);
+      if (first.flaky) problems.push("the tests are flaky on the stubs");
+      else if (first.tests.pass > 0) problems.push(`${first.tests.pass} tests pass on the stubs`);
+      else if (first.kind !== "assertion") problems.push("tests fail, but not all on assertions (a missing export, a compile error, a throw or a timeout): fix the stubs or wrap the calls so every test fails on an expect");
+    }
+    if (!problems.length) {
+      git(["fetch", "-q", w.clone, w.stubCommit], dir); // only the stub commit enters the answerer's repository
+      git(["merge", "--ff-only", "-q", "FETCH_HEAD"], dir);
       s.stubCommit = w.stubCommit;
+      writeFileSync(join(examDir(task), "count"), String(first!.tests.fail));
+      s.hiddenTests = first!.tests.fail;
       s.writerTests = w.reply;
     } else {
-      notes = `A check of your previous attempt failed: ${[...w.problems, ...(first ? [first.passed ? "the tests pass on the stubs" : first.flaky ? "the tests are flaky on the stubs" : "the tests fail, but not on an assertion (a missing export, a compile error or a crash): add or fix the stubs so they fail on assertions"] : [])].join("; ")}. Fix it.`;
+      notes = `A check of your previous attempt failed: ${problems.join("; ")}. Fix it.`;
       console.error(`writer attempt ${attempt}: ${notes}`);
     }
     save();
   }
   if (!s.stubCommit) {
-    hqRun("escalate", "--goal", task, "--task", task, "--why", "M1 writer could not produce hidden tests that fail first on assertions (D33)");
-    console.log(JSON.stringify({ task, result: "writer_failed" }));
-    process.exit(2);
+    hqRun("escalate", "--goal", task, "--task", task, "--why", "M1 writer could not produce hidden tests that all fail first on assertions (D33)");
+    finish("writer_failed", {}, 2);
   }
 }
 
-// 4. Answers judged by the hidden tests: at most --answers-left more (D43).
-const denyRead = [join(hqHome(), "exams"), join(hqHome(), "m1-runs")];
-const denyWrite = [".hq.json", ".github", "goals"].map((p) => join(wt, p));
-const brief = `This task is judged by hidden tests you cannot see. The interface list is goals/${task}.interfaces.md and stubs for new interfaces are already committed: keep the names and signatures exactly. When hidden tests fail you get their names and assertion messages only. Do not change goals/, .hq.json or .github/.`;
-let left = Number(o["answers-left"]);
+// 4. Answers judged by the hidden tests: at most 3 in all (D43).
+const c = criteriaOf(dir, task);
+const g = JSON.parse(readFileSync(join(dir, "goals", `${task}.json`), "utf8"));
+const scope: string = g.scope ?? "hq";
+const check: string = g.check ?? `cd ${scope} && bun test --timeout 30000 && bunx tsc --noEmit`;
 let notes = o.notes ? readFileSync(o.notes, "utf8") : "";
-s.answers ??= [];
-while (left-- > 0) {
+while (s.answers.length < MAX_ANSWERS) {
   const n = s.answers.length + 1;
-  const notesFile = join(out, `answer-${n}-notes.txt`);
-  writeFileSync(notesFile, [brief, notes].filter(Boolean).join("\n\n"));
+  const prompt = `You are working in ${dir}, a git repository, on branch answer. Implement this task:
+
+${c.title}
+
+Acceptance criteria:
+${c.text}
+
+How to work:
+- The interface list is goals/${task}.interfaces.md, and stubs for its new interfaces are already committed: implement them, keeping the names and signatures exactly.
+- The task is judged by hidden tests you cannot see. When they fail you get the names of the failing tests and their assertion messages only.
+- Read docs/architecture.md and the existing code under ${scope}/ first; match its style, naming, comment density and test style.
+- Run \`${check}\` and make it pass. Tests that need the sandbox runtime are skipped when SANDBOX_RUNTIME=1; that is expected.
+- Do not change files outside ${scope}/ except docs/architecture.md if a new module needs a line there. Do not change goals/, .hq.json, .github/, package.json or bunfig.toml files.
+- Commit your work on the current branch with a clear message.
+- When done, say in two or three sentences what you built and how you tested it.${notes ? `\n\n${notes}` : ""}`;
   const log = join(out, `answer-${n}.jsonl`);
-  const a = sh(["bun", join(repo, "scripts/m0/answer.ts"), wt, task, ANSWERER, log, notesFile], repo, {
-    HQ_DENY_READ: JSON.stringify(denyRead), HQ_DENY_WRITE: JSON.stringify(denyWrite),
-  });
-  const result = (() => { try { return JSON.parse(a.out.slice(a.out.indexOf("{"))); } catch { return null; } })();
-  cost(log, ANSWERER);
-  if (!result || result.is_error) {
-    s.answers.push({ n, error: result?.result ?? a.out.slice(-500) });
+  const r = claude(["--model", ANSWERER, "--effort", "high", "--settings", JSON.stringify(answererOf(task, dir)), "--permission-mode", "acceptEdits", "--disallowedTools", "WebFetch", "WebSearch"], prompt, dir);
+  writeFileSync(log, r.log);
+  spent(log, ANSWERER, r.result?.total_cost_usd ?? 0);
+  if (!r.result || r.result.is_error) {
+    s.answers.push({ n, error: String(r.result?.result ?? "no result").slice(0, 500) });
     save();
-    console.log(JSON.stringify({ task, result: "answerer_error", detail: result?.result }));
-    process.exit(3);
+    finish("answerer_error", { detail: r.result?.result }, 3);
   }
   hqRun("task", "gate", task, "self_test", "pass", "--claimed-done", "--note", `answer ${n}`);
-  const head = git(["rev-parse", "HEAD"], wt);
-  const g = await grade(task, head);
-  s.answers.push({ n, head, passed: g.passed, flaky: g.flaky, kind: g.kind, log: g.log });
+  const head = git(["rev-parse", "HEAD"], dir);
+  const gr = await grade(task, dir, head);
+  s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, log: gr.log, feedback: gr.feedback });
   save();
-  if (g.flaky) {
+  if (gr.flaky) {
     hqRun("task", "gate", task, "hidden_tests", "fail", "--note", `answer ${n}: hidden tests flaky on the same code (D36): back to the writer`);
-    console.log(JSON.stringify({ task, result: "flaky", log: g.log }));
-    process.exit(4);
+    finish("flaky", { log: gr.log }, 4);
   }
-  hqRun("task", "gate", task, "hidden_tests", g.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}${g.passed ? "" : `: ${g.kind}`}`);
-  if (g.passed) {
-    const f = await falsify(task, s.stubCommit, head);
-    hqRun("task", "gate", task, "falsify", f.ok ? "pass" : "fail", "--note", f.ok ? `reverted ${f.reverted.length} files` : f.reason);
+  hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}`);
+  if (gr.passed) {
+    const f = await falsify(task, dir, s.stubCommit, head);
+    hqRun("task", "gate", task, "falsify", f.ok ? "pass" : "fail", "--note", f.ok ? `reverted ${f.reverted.length} files: all hidden tests fail on assertions` : f.reason);
     s.falsify = f;
     save();
-    console.log(JSON.stringify({ task, result: "passed", head, answers: n, falsify: f.ok, worktree: wt, base: s.base }));
-    process.exit(0);
+    if (!f.ok) finish("falsify_failed", { head, reason: f.reason, log: f.log }, 7);
+    finish("passed", { head, answers: n, dir, base: git(["rev-list", "--max-parents=0", "HEAD"], dir) });
   }
-  notes = `Hidden tests failed on your answer:\n${g.feedback}`;
+  notes = `Hidden tests failed on your answer (${gr.tests.pass} pass, ${gr.tests.fail} fail):\n${gr.feedback}`;
 }
-console.log(JSON.stringify({ task, result: "out_of_answers", answers: s.answers.length }));
-process.exit(5);
+finish("out_of_answers", { answers: s.answers.length }, 5);
