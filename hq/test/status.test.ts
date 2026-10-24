@@ -137,7 +137,7 @@ test("open tasks: started on the goal, not shelved, goal not merged since; lates
   const ts = s.none!.open_tasks;
   expect(ts.map((t) => t.task)).toEqual(["t1"]);
   expect(ts[0]!.title).toBe("task t1");
-  expect(ts[0]!.gates).toEqual({ self_test: "pass", full_tests: "fail", codex_review: null, claude_diff: null });
+  expect(ts[0]!.gates).toEqual({ self_test: "pass", full_tests: "fail", codex_review: null, claude_diff: null, hidden_tests: null, falsify: null });
   expect(s.green!.open_tasks.map((t) => t.task)).toEqual(["t4"]);
   expect(s.red!.open_tasks.map((t) => t.task)).toEqual(["t5"]);
   expect(s.stale!.open_tasks).toEqual([]);
@@ -154,7 +154,7 @@ test("text output shows each goal's state, worktree and tasks", () => {
   expect(block).toContain(`goal/green  ${revParse("goal/green", repo)!.slice(0, 12)} green: work`);
   expect(block).toContain(`2 ahead, 1 behind main; worktree ${paths.green}`);
   expect(block).toContain("report: green; approval: approved");
-  expect(r.out).toContain("t1  task t1  [self_test -, full_tests -, codex_review -, claude_diff pass]");
+  expect(r.out).toContain("t1  task t1  [self_test -, full_tests -, codex_review -, claude_diff pass, hidden_tests -, falsify -]");
   expect(r.out).toContain("report: red; approval: none");
   expect(r.out).toContain("report: stale; approval: void");
   expect(r.out).toContain("bare: bare");

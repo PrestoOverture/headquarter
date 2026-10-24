@@ -9,13 +9,17 @@ import { join } from "node:path";
 import { hqHome, repoId } from "./approval";
 
 // claude_diff: a fresh Claude session, not the author, reads the diff (you do not; 2026-10-23).
-export const GATES = ["self_test", "full_tests", "codex_review", "claude_diff"] as const;
+// hidden_tests, falsify: M1's gates (roadmap M1 实施计划): the writer's hidden tests, and the
+// check that they fail again once the implementation is reverted to the stubs.
+export const GATES = ["self_test", "full_tests", "codex_review", "claude_diff", "hidden_tests", "falsify"] as const;
+// Which arm of the M0/M1 comparison (D37) a task belongs to; tasks without one are M0.
+export const ARMS = ["m0", "m1"] as const;
 export type Gate = (typeof GATES)[number];
 export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
 export const CAUSES = ["cheat", "misunderstanding", "other"] as const;
 
 export type Event = { at: string } & (
-  | { type: "task.start"; task: string; goal: string; title: string; base: string; difficulty: (typeof DIFFICULTIES)[number]; model: string }
+  | { type: "task.start"; task: string; goal: string; title: string; base: string; difficulty: (typeof DIFFICULTIES)[number]; model: string; arm?: (typeof ARMS)[number] }
   | { type: "task.gate"; task: string; gate: Gate; result: "pass" | "fail"; claimed_done: boolean; note?: string }
   | { type: "task.cost"; task: string; usd: number; model?: string; runs?: string[]; sessions?: string[]; source?: { path: string; sha256: string } }
   | { type: "task.lines"; task: string; added: number; deleted: number; end: string }

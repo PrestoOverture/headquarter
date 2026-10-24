@@ -228,14 +228,14 @@ describe("--csv", () => {
     const lines = statsCommand(repo, ["--csv", "--goal", "a"]).split("\r\n");
     expect(lines[0]).toBe(
       "task,goal,title,difficulty,model,status,started_at,merged_at,lines,cost_usd," +
-        "self_test_pass,self_test_fail,full_tests_pass,full_tests_fail,codex_review_pass,codex_review_fail,claude_diff_pass,claude_diff_fail,escaped",
+        "self_test_pass,self_test_fail,full_tests_pass,full_tests_fail,codex_review_pass,codex_review_fail,claude_diff_pass,claude_diff_fail,hidden_tests_pass,hidden_tests_fail,falsify_pass,falsify_fail,escaped,arm",
     );
     expect(lines[1]).toBe(
-      `a1,a,a1,medium,claude-sonnet-5-5,merged,${day(0).toISOString()},${day(7, 2).toISOString()},15,1,0,1,0,0,1,0,0,0,true`,
+      `a1,a,a1,medium,claude-sonnet-5-5,merged,${day(0).toISOString()},${day(7, 2).toISOString()},15,1,0,1,0,0,1,0,0,0,0,0,0,0,true,m0`,
     );
     expect(lines[2]).toStartWith("a2,a,a2,medium,claude-sonnet-5-5,merged,");
     expect(lines[2]).toContain(",,4,"); // no size recorded: empty lines field; cost 4
-    expect(lines[2]).toEndWith(",0,0,false"); // a2 never needed rework
+    expect(lines[2]).toEndWith(",0,0,0,0,0,0,false,m0"); // a2 never needed rework
     expect(lines[3]).toBe(""); // every record, the last included, ends with CRLF
     expect(lines).toHaveLength(4);
   });
@@ -247,7 +247,7 @@ describe("--csv", () => {
     expect(out).toContain('"Add ""stats"", filters"');
     expect(out).toContain('"two\nlines"');
     expect(parseCsv(out).slice(1).map((r) => r[2])).toEqual(titles);
-    expect(parseCsv(out).every((r) => r.length === 19)).toBe(true);
+    expect(parseCsv(out).every((r) => r.length === 24)).toBe(true);
   });
 });
 
@@ -284,3 +284,24 @@ function parseCsv(text: string): string[][] {
   }
   return rows;
 }
+
+describe("--arm", () => {
+  test("keeps one arm of the M0/M1 comparison; tasks without an arm are M0", () => {
+    put(day(30), { type: "task.start", task: "m1a", goal: "r1", title: "replay", base: "b0", difficulty: "hard", model: "claude-sonnet-5-5", arm: "m1" });
+    put(day(30, 1), { type: "task.gate", task: "m1a", gate: "hidden_tests", result: "fail", claimed_done: true });
+    expect(tasks("--arm", "m1")).toEqual(["m1a"]);
+    expect(tasks("--arm", "m0").sort()).toEqual(["a1", "a2", "b1"]);
+    expect(json("--arm", "m1").caught_by_gate.hidden_tests).toEqual({ n: 1, of: 1, rate: 1 });
+    expect(statsCommand(repo, ["--arm", "m1"])).toContain("组 M1");
+    expect(() => statsCommand(repo, ["--arm", "m2"])).toThrow("--arm");
+  });
+
+  test("hq task start --arm records the arm, m0 by default", () => {
+    const run = (...a: string[]) => Bun.spawnSync([process.execPath, CLI, ...a], { cwd: repo, env: { ...process.env } });
+    run("task", "start", "x1", "--goal", "g", "--title", "t", "--model", "m", "--arm", "m1");
+    run("task", "start", "x0", "--goal", "g", "--title", "t", "--model", "m");
+    expect(tasks("--arm", "m1")).toContain("x1");
+    expect(tasks("--arm", "m0")).toContain("x0");
+    expect(run("task", "start", "x2", "--goal", "g", "--title", "t", "--model", "m", "--arm", "m3").exitCode).not.toBe(0);
+  });
+});

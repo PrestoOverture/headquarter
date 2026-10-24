@@ -14,6 +14,7 @@ export type TaskRow = {
   goal: string;
   title: string;
   difficulty: string;
+  arm: "m0" | "m1"; // tasks started without an arm are M0
   model: string;
   base: string;
   started_at: string;
@@ -29,7 +30,7 @@ export type TaskRow = {
   escape_window_open: boolean;
 };
 
-export type Filters = { goals?: string[]; since?: Date; until?: Date };
+export type Filters = { goals?: string[]; since?: Date; until?: Date; arm?: "m0" | "m1" };
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
@@ -54,9 +55,9 @@ export function parseDate(text: string, flag: string): Date {
  * when at least one task it belongs to is kept, so no numerator comes from uncounted tasks.
  */
 export function filterEvents(events: Event[], f: Filters): Event[] {
-  if (!f.goals && f.since === undefined && f.until === undefined) return events;
-  const starts = new Map<string, { goal: string; at: number }>();
-  for (const e of events) if (e.type === "task.start") starts.set(e.task, { goal: e.goal, at: Date.parse(e.at) });
+  if (!f.goals && f.since === undefined && f.until === undefined && !f.arm) return events;
+  const starts = new Map<string, { goal: string; at: number; arm: string }>();
+  for (const e of events) if (e.type === "task.start") starts.set(e.task, { goal: e.goal, at: Date.parse(e.at), arm: e.arm ?? "m0" });
   const shelvedAt = new Map<string, number>();
   const mergesOf = new Map<string, number[]>(); // goal → merge times
   for (const e of events) {
@@ -67,7 +68,8 @@ export function filterEvents(events: Event[], f: Filters): Event[] {
   for (const [task, s] of starts) {
     const inGoals = !f.goals || f.goals.includes(s.goal);
     const inWindow = (!f.since || s.at >= f.since.getTime()) && (!f.until || s.at < f.until.getTime());
-    if (inGoals && inWindow) kept.add(task);
+    const inArm = !f.arm || s.arm === f.arm;
+    if (inGoals && inWindow && inArm) kept.add(task);
   }
   const open = (task: string, s: { goal: string; at: number }, t: number) =>
     s.at <= t && !((shelvedAt.get(task) ?? Infinity) < t) && !(mergesOf.get(s.goal) ?? []).some((m) => m >= s.at && m < t);
@@ -86,6 +88,7 @@ export function describeFilters(f: Filters): string {
   if (f.goals) parts.push(`目标 ${f.goals.join("、")}`);
   if (f.since) parts.push(`自 ${f.since.toISOString()} 起`);
   if (f.until) parts.push(`至 ${f.until.toISOString()} 前`);
+  if (f.arm) parts.push(`组 ${f.arm.toUpperCase()}`);
   return parts.join("；");
 }
 
@@ -98,7 +101,7 @@ export function rows(events: Event[], now = new Date()): TaskRow[] {
   for (const e of events) {
     if (e.type === "task.start") {
       byTask.set(e.task, {
-        task: e.task, goal: e.goal, title: e.title, difficulty: e.difficulty, model: e.model, base: e.base, started_at: e.at,
+        task: e.task, goal: e.goal, title: e.title, difficulty: e.difficulty, arm: e.arm ?? "m0", model: e.model, base: e.base, started_at: e.at,
         status: "open", gates: {}, cost_usd: 0, size: null, causes: [], false_rejects: 0, escaped: false, escape_window_open: false,
       });
       continue;
@@ -193,10 +196,10 @@ const csvField = (v: string | number | boolean) => {
 
 /** RFC 4180: a header and one record per task, each ended by CRLF. */
 export function toCsv(rs: TaskRow[]): string {
-  const header = ["task", "goal", "title", "difficulty", "model", "status", "started_at", "merged_at", "lines", "cost_usd", ...GATES.flatMap((g) => [`${g}_pass`, `${g}_fail`]), "escaped"];
+  const header = ["task", "goal", "title", "difficulty", "model", "status", "started_at", "merged_at", "lines", "cost_usd", ...GATES.flatMap((g) => [`${g}_pass`, `${g}_fail`]), "escaped", "arm"];
   const records = rs.map((r) => [
     r.task, r.goal, r.title, r.difficulty, r.model, r.status, r.started_at, r.merged_at ?? "", r.size?.lines ?? "", r.cost_usd,
-    ...GATES.flatMap((g) => [r.gates[g]?.pass ?? 0, r.gates[g]?.fail ?? 0]), r.escaped,
+    ...GATES.flatMap((g) => [r.gates[g]?.pass ?? 0, r.gates[g]?.fail ?? 0]), r.escaped, r.arm,
   ]);
   return [header, ...records].map((rec) => rec.map(csvField).join(",") + "\r\n").join("");
 }

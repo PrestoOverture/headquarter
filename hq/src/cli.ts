@@ -16,7 +16,7 @@
 //   hq install-hook       install the main-ref guard into this repository's git hooks
 //   hq guard              (called by the hook)
 //
-//   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>]
+//   hq task start <task> --goal <goal> --title <text> [--difficulty easy|medium|hard] [--model <id>] [--base <commit>] [--arm m0|m1]
 //   hq task gate <task> <self_test|full_tests|codex_review|claude_diff> <pass|fail> [--claimed-done] [--note <text>]
 //   hq task cost <task> <usd> [--model <id>]
 //   hq task cost <task> --from <file> [--model <id>]   sum of total_cost_usd over the result messages (runs, by uuid) in a stream-json log or json result; recorded runs are skipped
@@ -27,7 +27,7 @@
 //   hq escalate --goal <goal> --why <text> [--task <task>] [--minutes <n>]
 //   hq escape <task> --note <text>
 //   hq escapes            goals merged in the last 14 days that a later fix touches again (suggestions; records nothing)
-//   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>]
+//   hq stats [--json | --tasks | --csv] [--goal <goal>]… [--since <date>] [--until <date>] [--arm m0|m1]
 
 import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -38,7 +38,7 @@ import { git, revParse } from "./git";
 import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
 import { recordCostFrom } from "./cost";
-import { append, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
+import { append, ARMS, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
 import { recordLines } from "./lines";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
@@ -116,7 +116,7 @@ export function record(cwd: string, args: string[]): string {
     args,
     allowPositionals: true,
     options: {
-      goal: { type: "string" }, title: { type: "string" }, difficulty: { type: "string", default: "medium" },
+      goal: { type: "string" }, title: { type: "string" }, difficulty: { type: "string", default: "medium" }, arm: { type: "string", default: "m0" },
       model: { type: "string" }, base: { type: "string" }, "claimed-done": { type: "boolean", default: false },
       note: { type: "string" }, rev: { type: "string" }, why: { type: "string" }, task: { type: "string" }, minutes: { type: "string" },
       from: { type: "string" },
@@ -146,6 +146,7 @@ export function record(cwd: string, args: string[]): string {
       append(cwd, {
         type: "task.start", task, goal, title: need(o.title, "--title"), base: git(["rev-parse", base], cwd),
         difficulty: oneOf(o.difficulty, DIFFICULTIES, "--difficulty"), model: need(o.model ?? process.env.HQ_MODEL, "--model"),
+        arm: oneOf(o.arm, ARMS, "--arm"),
       });
       return `task ${task} started on goal ${goal}`;
     }
@@ -190,7 +191,7 @@ export function statsCommand(cwd: string, args: string[]): string {
     args,
     options: {
       json: { type: "boolean" }, tasks: { type: "boolean" }, csv: { type: "boolean" },
-      goal: { type: "string", multiple: true }, since: { type: "string" }, until: { type: "string" },
+      goal: { type: "string", multiple: true }, since: { type: "string" }, until: { type: "string" }, arm: { type: "string" },
     },
   });
   if ([o.json, o.tasks, o.csv].filter(Boolean).length > 1) throw new Error("use only one of --json, --tasks, --csv");
@@ -198,6 +199,7 @@ export function statsCommand(cwd: string, args: string[]): string {
     goals: o.goal,
     since: o.since === undefined ? undefined : parseDate(o.since, "--since"),
     until: o.until === undefined ? undefined : parseDate(o.until, "--until"),
+    arm: o.arm === undefined ? undefined : oneOf(o.arm, ARMS, "--arm"),
   };
   const events = filterEvents(readEvents(cwd), filters);
   if (o.csv) return toCsv(rows(events));
