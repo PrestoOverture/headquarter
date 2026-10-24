@@ -13,7 +13,7 @@
 
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { deniedReads, examDir, failing, failureKind, feedback, git, repo, runDir, scratchDir, sh, sourceLines, summary } from "./common";
+import { deniedReads, examDir, failing, failureKind, feedback, git, repo, runDir, scratchDir, sh, sourceLines, summary, unescaped } from "./common";
 import { hiddenFiles } from "./writer";
 
 const SRT = join(repo, "hq/node_modules/.bin/srt");
@@ -98,7 +98,7 @@ export async function grade(task: string, dir: string, commit: string, expected?
     const last = runs.at(-1)!;
     const lines = sourceLines(sources);
     // Code under test that prints the hidden tests (it can read them in the scratch worktree).
-    const suspect = last.out.split("\n").some((l) => /^\s*(Received|Expected|[-+] )/.test(l) && lines.some((s) => l.includes(s)));
+    const suspect = last.out.split("\n").some((l) => /^\s*(Received|Expected|[-+] )/.test(l) && lines.some((s) => unescaped(l).includes(s)));
     return {
       commit, passed, runs: runs.map((r) => r.code), flaky, kind: passed ? null : failureKind(last.out), tests: summary(last.out), sealed: last.sealed, suspect,
       feedback: passed ? "" : feedback(last.out, files, sources), log,

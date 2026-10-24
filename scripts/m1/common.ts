@@ -61,8 +61,11 @@ export function deniedReads(task: string, opts: { exam: boolean; scratch?: boole
   const all = (kind: string) => (existsSync(join(M1_HOME, kind)) ? readdirSync(join(M1_HOME, kind)).map((t) => join(M1_HOME, kind, t)) : []);
   const others = (kind: string) => all(kind).filter((d) => !d.endsWith(`/${task}`));
   return [
-    repo, `${repo}.goals`, hqHome(), join(home, ".claude", "projects"), join(home, ".claude", "file-history"), join(home, ".claude", "todos"),
-    join(home, ".codex", "sessions"), join(home, ".codex", "archived_sessions"), `/private/tmp/claude-${process.getuid!()}`,
+    repo, `${repo}.goals`, hqHome(),
+    // Claude Code's records (transcripts, file history, prompt history, paste cache, ...): all of
+    // ~/.claude but the shell snapshots its Bash tool sources. Codex's, all of them (M1 sessions never run Codex).
+    ...(existsSync(join(home, ".claude")) ? readdirSync(join(home, ".claude")).filter((d) => d !== "shell-snapshots").map((d) => join(home, ".claude", d)) : []),
+    join(home, ".codex"), `/private/tmp/claude-${process.getuid!()}`,
     ...(existsSync(TMP_ROOT) ? readdirSync(TMP_ROOT).map((d) => join(TMP_ROOT, d)) : []), ...(opts.scratch === false ? [] : [join(M1_HOME, "scratch")]), join(M1_HOME, "runs"), ...others("repos"),
     ...(opts.exam ? [join(M1_HOME, "exams"), join(M1_HOME, "writers")] : others("exams")),
   ];
@@ -140,9 +143,12 @@ export function failureKind(output: string): "assertion" | "other" {
   return "assertion";
 }
 
-/** Lines of the hidden tests long enough that seeing one in the output means test code got out. */
+/** Bun prints string values escaped (\" and \n): compare text with the backslashes taken out. */
+export const unescaped = (s: string) => s.replace(/\\/g, "");
+
+/** Lines of the hidden tests long enough that seeing one in the output means test code got out (unescaped). */
 export function sourceLines(sources: string[]): string[] {
-  return [...new Set(sources.flatMap((s) => s.split("\n").map((l) => l.trim()).filter((l) => l.length >= 20)))];
+  return [...new Set(sources.flatMap((s) => s.split("\n").map((l) => unescaped(l.trim())).filter((l) => l.length >= 20)))];
 }
 
 /**
@@ -158,7 +164,7 @@ export function feedback(output: string, hiddenFiles: string[] = [], sources: st
   for (const raw of output.split("\n")) {
     const l = raw.replace(/\x1b\[[0-9;]*m/g, "");
     if (/^\s*\d+\s*\|/.test(l) || /^\s*at\s/.test(l)) continue; // source excerpt, stack frame
-    if (l.includes("/.hq-m1/") || l.includes(M1_HOME) || names.some((n) => l.includes(n)) || lines.some((s) => l.includes(s))) continue;
+    if (l.includes("/.hq-m1/") || l.includes(M1_HOME) || names.some((n) => l.includes(n)) || lines.some((s) => unescaped(l).includes(s))) continue;
     if (/^\(fail\)|^error:|^\s*Expected|^\s*Received|^\s*[-+] /.test(l)) keep.push(l.trimEnd().slice(0, 400));
   }
   return keep.slice(0, 200).join("\n");

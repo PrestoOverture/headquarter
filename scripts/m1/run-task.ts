@@ -120,7 +120,9 @@ const c = criteriaOf(dir, task);
 const g = JSON.parse(readFileSync(join(dir, "goals", `${task}.json`), "utf8"));
 const scope: string = g.scope ?? "hq";
 const check: string = g.check ?? `cd ${scope} && bun test --timeout 30000 && bunx tsc --noEmit`;
-let notes = o.notes ? readFileSync(o.notes, "utf8") : "";
+// On resume after a failed answer, its feedback goes to the next answer too.
+const lastFail = s.answers.at(-1)?.feedback ? s.answers.at(-1) : null;
+let notes = [lastFail ? `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${lastFail.feedback}` : "", o.notes ? readFileSync(o.notes, "utf8") : ""].filter(Boolean).join("\n\n");
 while (s.answers.length < MAX_ANSWERS) {
   const n = s.answers.length + 1;
   const prompt = `You are working in ${dir}, a git repository, on branch answer. Implement this task:
@@ -168,7 +170,7 @@ How to work:
   }
   hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}${gr.sealed !== gr.tests.pass + gr.tests.fail ? `, seal counted ${gr.sealed}` : ""}${gr.suspect ? ", output carries hidden test code" : ""}`);
   if (gr.passed) {
-    const f = await falsify(task, dir, s.stubCommit, head);
+    const f = await falsify(task, dir, s.stubCommit, head, s.hiddenTests);
     hqRun("task", "gate", task, "falsify", f.ok ? "pass" : "fail", "--note", f.ok ? `reverted ${f.reverted.length} files: all hidden tests fail on assertions` : f.reason);
     s.falsify = f;
     save();

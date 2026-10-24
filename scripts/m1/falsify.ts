@@ -10,7 +10,7 @@ import { git, sh } from "./common";
 import { grade } from "./grade";
 import { TEST_PATH } from "./writer";
 
-export async function falsify(task: string, dir: string, stubCommit: string, answer: string) {
+export async function falsify(task: string, dir: string, stubCommit: string, answer: string, count?: number) {
   const changed = git(["diff", "--name-status", "--no-renames", `${stubCommit}..${answer}`], dir).split("\n").filter(Boolean)
     .map((l) => l.split("\t") as [string, string]).filter(([, f]) => !TEST_PATH.test(f) && !f.startsWith("goals/"));
   if (!changed.length) return { ok: false, reason: "the answer changed no source files", reverted: [] as string[], log: "" };
@@ -29,8 +29,11 @@ export async function falsify(task: string, dir: string, stubCommit: string, ans
     rmSync(scratch, { recursive: true, force: true });
   }
   const g = await grade(task, dir, reverted);
-  const ok = !g.passed && !g.flaky && g.kind === "assertion" && g.tests.pass === 0;
+  // Every hidden test must have run and failed on an assertion: none skipped, none cut short.
+  const all = g.tests.skip === 0 && g.sealed === g.tests.fail && (count === undefined || g.tests.fail === count);
+  const ok = !g.passed && !g.flaky && g.kind === "assertion" && g.tests.pass === 0 && all;
   const reason = ok ? "" : g.passed ? "hidden tests still pass with the implementation reverted"
-    : g.flaky ? "flaky" : g.tests.pass > 0 ? `${g.tests.pass} hidden tests still pass with the implementation reverted` : "fails, but not only on assertions";
+    : g.flaky ? "flaky" : g.tests.pass > 0 ? `${g.tests.pass} hidden tests still pass with the implementation reverted`
+    : g.kind !== "assertion" ? "fails, but not only on assertions" : `not every hidden test ran and failed (${g.tests.fail} failed, ${g.tests.skip} skipped, seal counted ${g.sealed})`;
   return { ok, reason, reverted: changed.map(([, f]) => f), log: g.log };
 }

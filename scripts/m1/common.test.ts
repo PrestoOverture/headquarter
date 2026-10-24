@@ -45,7 +45,8 @@ test("feedback keeps test names and assertion messages, never test code, the exa
 
 test("feedback drops lines carrying the hidden test code, whatever the code under test returned", () => {
   const line = `expect(statusOf(ledger)).toContain("goal/x  ");`;
-  const run = `error: expect(received).toBe(expected)\nExpected: "ok"\nReceived: "test(() => {\\n  ${line}"\n(fail) lists [1ms]`;
+  // as Bun prints a string value: one line, newlines and quotes escaped
+  const run = `error: expect(received).toBe(expected)\nExpected: "ok"\nReceived: ${JSON.stringify(`test(() => {\n  ${line}`)}\n(fail) lists [1ms]`;
   const f = feedback(run, [], [`test("lists", () => {\n  ${line}\n});\n`]);
   expect(f).toContain("(fail) lists");
   expect(f).toContain('Expected: "ok"');

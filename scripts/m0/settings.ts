@@ -16,7 +16,7 @@ export function answererSettings(commonDir: string, home: string, denyRead: stri
       deny: [
         // File tools are outside the sandbox: deny them separately (tech_stacks 沙箱与安全).
         ...CREDENTIALS.map((p) => `Read(//${join(home, p).slice(1)}/**)`),
-        ...denyRead.map((p) => `Read(/${p}/**)`),
+        ...denyRead.flatMap((p) => [`Read(/${p})`, `Read(/${p}/**)`]), // a file or a directory
         ...denyWrite.flatMap((p) => [`Edit(/${p})`, `Edit(/${p}/**)`, `Write(/${p})`, `Write(/${p}/**)`]),
       ],
     },
