@@ -1,1 +1,1 @@
-{"test": "(cd eval && bun test --timeout 30000) && (cd hq && bun test --timeout 30000) && bun test --timeout 30000 scripts/sandbox"}
+{"test": "(cd eval && bun test --timeout 30000) && (cd hq && bun test --timeout 30000) && bun test --timeout 30000 scripts/sandbox && bun test --timeout 30000 scripts/m1"}

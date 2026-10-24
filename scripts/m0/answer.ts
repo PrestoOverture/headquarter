@@ -11,16 +11,15 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { sandboxSettings } from "../sandbox/check";
+import { answererSettings } from "./settings";
 
 const [wt, goal, model, out, notes] = process.argv.slice(2);
 if (!wt || !goal || !model || !out) throw new Error("usage: answer.ts <worktree> <goal> <model> <out.jsonl> [<rework-notes>]");
 const commonDir = resolve(wt, Bun.spawnSync(["git", "rev-parse", "--git-common-dir"], { cwd: wt }).stdout.toString().trim());
 const home = process.env.HOME!;
-const settings = {
-  ...sandboxSettings(commonDir, home),
-  permissions: { deny: [".ssh", ".aws", ".gnupg", ".config/gh", ".netrc"].map((p) => `Read(//${join(home, p).slice(1)}/**)`) },
-};
+// M1 (D30): HQ_DENY_READ and HQ_DENY_WRITE (JSON lists of absolute paths) add the exam, which the
+// answerer may neither read nor write, and the test configuration it may not change.
+const settings = answererSettings(commonDir, home, JSON.parse(process.env.HQ_DENY_READ ?? "[]"), JSON.parse(process.env.HQ_DENY_WRITE ?? "[]"));
 // A goal with several tasks keeps them under "tasks"; TASK=<id> picks one (title, acceptance,
 // scope, check), otherwise the goal file itself is the task.
 const goalFile = JSON.parse(readFileSync(join(wt, "goals", `${goal}.json`), "utf8"));
