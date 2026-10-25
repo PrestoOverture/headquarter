@@ -53,18 +53,20 @@ test("feedback drops lines carrying the hidden test code, whatever the code unde
   expect(f).not.toContain("statusOf");
 });
 
-test("feedback trusts only known failing tests and gives the rest one small budget", () => {
+test("feedback trusts only known failing tests, each with a few short lines of its own", () => {
   const long = "Q".repeat(1000);
   const run = [
     "error: expect(received).toBe(expected)", 'Expected: "ok"', `Received: "${long}"`, ...Array.from({ length: 10 }, (_, i) => `+ chunk${i}`), "(fail) a [1ms]",
     "error: expect(received).toBe(expected)", 'Received: "second"', "(fail) b [1ms]",
-    ...Array.from({ length: 50 }, (_, i) => `(fail) Zm9yZ2Vk${i}`), // printed by the code under test
+    ...Array.from({ length: 50 }, (_, i) => `error: Zm9yZ2Vk${i}\n(fail) Zm9yZ2Vk${i}`), // printed by the code under test
   ].join("\n");
   const f = feedback(run, [], [], ["a", "b", "c"]).split("\n");
   expect(f.filter((l) => l.startsWith("(fail)"))).toEqual(["(fail) a [1ms]", "(fail) b [1ms]"]);
-  expect(f.filter((l) => !l.startsWith("(fail)"))).toHaveLength(8); // 4 per known failing test
+  expect(f).toHaveLength(4 + 1 + 2 + 1); // a: its first 4 lines; b: both of its lines
+  expect(f).toContain('Received: "second"');
+  expect(f).not.toContain("+ chunk1");
   expect(f.find((l) => l.startsWith('Received: "Q'))!.length).toBe(160);
-  expect(feedback(run).split("\n").length).toBeLessThanOrEqual(52 + 4 * 52); // without names: still bounded per failing line
+  expect(f.join("\n")).not.toContain("Zm9yZ2Vk");
 });
 
 test("feedback strips color codes and caps its length", () => {

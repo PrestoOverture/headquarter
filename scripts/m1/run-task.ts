@@ -11,13 +11,13 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { claude, examDir, git, repo, runDir, sh, usageLimited } from "./common";
+import { claude, examDir, git, GIT, repo, runDir, sh, usageLimited } from "./common";
 import { falsify } from "./falsify";
 import { grade } from "./grade";
 import { criteriaOf, interfaces } from "./interfaces";
 import { answererOf, configTouched } from "./sessions";
 import { prepare } from "./workspace";
-import { write } from "./writer";
+import { TEST_PATH, write } from "./writer";
 
 const MAX_ANSWERS = 3; // D43
 const ANSWERER = "claude-sonnet-5-5";
@@ -124,10 +124,12 @@ const c = criteriaOf(dir, task);
 const g = JSON.parse(readFileSync(join(dir, "goals", `${task}.json`), "utf8"));
 const scope: string = g.scope ?? "hq";
 const check: string = g.check ?? `cd ${scope} && bun test --timeout 30000 && bunx tsc --noEmit`;
-// What the last answer was told comes back on resume (s.notes); --notes adds review findings.
-let notes: string = [s.notes ?? "", o.notes ? readFileSync(o.notes, "utf8") : ""].filter(Boolean).join("\n\n");
-s.notes = notes; // a resumed rework run keeps its review findings
+// What the next answer is told, kept in the state for a resumed run: what the grader said of
+// the last answer (s.notes) and the review findings of a rework round (s.review, from --notes;
+// given again on resume it replaces, not adds).
+if (o.notes) s.review = readFileSync(o.notes, "utf8");
 save();
+const told = () => [s.notes, s.review].filter(Boolean).join("\n\n");
 while (s.answers.length < MAX_ANSWERS) {
   const n = s.answers.length + 1;
   const prompt = `You are working in ${dir}, a git repository, on branch answer. Implement this task:
@@ -144,7 +146,7 @@ How to work:
 - Run \`${check}\` and make it pass. Tests that need the sandbox runtime are skipped when SANDBOX_RUNTIME=1; that is expected.
 - Do not change files outside ${scope}/ except docs/architecture.md if a new module needs a line there. Do not change goals/, .hq.json, .github/, package.json or bunfig.toml files.
 - Commit your work on the current branch with a clear message.
-- When done, say in two or three sentences what you built and how you tested it.${notes ? `\n\n${notes}` : ""}`;
+- When done, say in two or three sentences what you built and how you tested it.${told() ? `\n\n${told()}` : ""}`;
   const log = join(out, `answer-${n}.jsonl`);
   const r = claude(["--model", ANSWERER, "--effort", "high", "--settings", JSON.stringify(answererOf(task, dir)), "--permission-mode", "acceptEdits", "--disallowedTools", "WebFetch", "WebSearch"], prompt, dir);
   writeFileSync(log, r.log);
@@ -157,10 +159,10 @@ How to work:
   hqRun("task", "gate", task, "self_test", "pass", "--claimed-done", "--note", `answer ${n}`);
   const head = git(["rev-parse", "HEAD"], dir);
   // The graded commit must be the one the reviews see (review-gates.ts reviews branch answer).
-  const branch = sh(["git", "symbolic-ref", "--short", "-q", "HEAD"], dir).out.trim();
+  const branch = sh([...GIT, "symbolic-ref", "--short", "-q", "HEAD"], dir).out.trim();
   if (branch !== "answer") {
     s.answers.push({ n, head, passed: false, offBranch: branch || "detached" });
-    s.notes = notes = `Your answer was not graded: the repository is on ${branch || "a detached HEAD"}, not on branch answer. Check out branch answer and commit your work there.`;
+    s.notes = `Your answer was not graded: the repository is on ${branch || "a detached HEAD"}, not on branch answer. Check out branch answer and commit your work there.`;
     save();
     hqRun("task", "gate", task, "hidden_tests", "fail", "--claimed-done", "--note", `answer ${n}: not on branch answer; not graded`);
     continue;
@@ -172,29 +174,34 @@ How to work:
     s.answers.push({ n, head, passed: false, configTouched: touched });
     save();
     hqRun("task", "gate", task, "hidden_tests", "fail", "--claimed-done", "--note", `answer ${n}: commits test configuration ${touched.join(", ")}; not graded (D30)`);
-    s.notes = notes = `Your answer was not graded: it changes ${touched.join(", ")}, which you may not change. Take those changes out (a new commit) and keep to the task.`;
+    s.notes = `Your answer was not graded: it changes ${touched.join(", ")}, which you may not change. Take those changes out (a new commit) and keep to the task.`;
     save();
     continue;
   }
+  // Source that imports bun:test could change how the hidden tests' assertions behave: flag it.
+  const testHooks = git(["diff", "--name-only", "--diff-filter=AM", `${s.stubCommit}..${head}`], dir).split("\n")
+    .filter((f) => f && !TEST_PATH.test(f) && /\.[cm]?[jt]sx?$/.test(f) && existsSync(join(dir, f)) && readFileSync(join(dir, f), "utf8").includes("bun:test"));
   const gr = await grade(task, dir, head);
-  s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, sealed: gr.sealed, suspect: gr.suspect, log: gr.log, feedback: gr.feedback });
+  s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, sealed: gr.sealed, suspect: gr.suspect || testHooks.length > 0, testHooks, log: gr.log, feedback: gr.feedback });
   save();
   if (gr.flaky) {
     hqRun("task", "gate", task, "hidden_tests", "fail", "--note", `answer ${n}: hidden tests flaky on the same code (D36): the run stops for a decision`);
     finish("flaky", { log: gr.log }, 4);
   }
-  hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}${gr.sealed !== gr.tests.pass + gr.tests.fail ? `, seal counted ${gr.sealed}` : ""}${gr.suspect ? ", output carries hidden test code" : ""}`);
+  hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}${gr.sealed !== gr.tests.pass + gr.tests.fail ? `, seal counted ${gr.sealed}` : ""}${gr.suspect ? ", output carries hidden test code" : ""}${testHooks.length ? `, source imports bun:test: ${testHooks.join(", ")}` : ""}`);
   if (gr.passed) {
     const f = await falsify(task, dir, s.stubCommit, head, s.hiddenTests);
     hqRun("task", "gate", task, "falsify", f.ok ? "pass" : "fail", "--note", f.ok ? `reverted ${f.reverted.length} files: all hidden tests fail on assertions` : f.reason);
     s.falsify = f;
-    s.notes = ""; // passed: nothing carries over to a later rework run
+    s.notes = s.review = ""; // passed: nothing carries over to a later rework run
     save();
     if (!f.ok) finish("falsify_failed", { head, reason: f.reason, log: f.log }, 7);
     finish("passed", { head, answers: n, dir, base: git(["rev-list", "--max-parents=0", "HEAD"], dir) });
   }
   // No totals: the answerer gets which tests failed and why, not the size of the exam.
-  s.notes = notes = `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${gr.feedback}`;
+  s.notes = gr.feedback
+    ? `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${gr.feedback}`
+    : "Hidden tests failed on your answer: they did not run to completion (no test reported a result), for example because the code exits, hangs or fails to load.";
   save();
 }
 finish("out_of_answers", { answers: s.answers.length }, 5);

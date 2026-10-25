@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, sh } from "./common";
+import { git, GIT, sh } from "./common";
 import { grade } from "./grade";
 import { TEST_PATH } from "./writer";
 
@@ -25,7 +25,7 @@ export async function falsify(task: string, dir: string, stubCommit: string, ans
     git(["-c", "user.name=m1-falsify", "-c", "user.email=m1@hq.invalid", "commit", "-q", "-m", `falsify ${task}`], scratch);
     reverted = git(["rev-parse", "HEAD"], scratch);
   } finally {
-    sh(["git", "worktree", "remove", "--force", scratch], dir);
+    sh([...GIT, "worktree", "remove", "--force", scratch], dir);
     rmSync(scratch, { recursive: true, force: true });
   }
   const g = await grade(task, dir, reverted);

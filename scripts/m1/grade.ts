@@ -13,7 +13,7 @@
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { deniedReads, examDir, failing, failureKind, feedback, git, repo, runDir, scratchDir, sh, sourceLines, summary, unescaped } from "./common";
+import { deniedReads, examDir, failing, failureKind, feedback, git, GIT, repo, runDir, scratchDir, sh, sourceLines, summary, unescaped } from "./common";
 import { hiddenFiles } from "./writer";
 
 const SRT = join(repo, "hq/node_modules/.bin/srt");
@@ -71,7 +71,7 @@ export async function inScratch<T>(task: string, dir: string, commit: string, us
     };
     return use({ scratch, cfg, run });
   } finally {
-    sh(["git", "worktree", "remove", "--force", scratch], dir);
+    sh([...GIT, "worktree", "remove", "--force", scratch], dir);
     rmSync(outer, { recursive: true, force: true });
   }
 }
