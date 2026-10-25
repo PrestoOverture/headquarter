@@ -139,15 +139,32 @@ export function failing(output: string): string[] {
 /**
  * Why a failing run failed: "assertion" only when every failing test failed on an assertion
  * (D7: not because an interface is missing or the code crashed, D34). Each failing test has
- * one `error:` line; every one of them must be an `expect(...)` assertion.
+ * one `error:` line. It is an assertion when it is `error: expect(...)` or, for an expect with
+ * its own message (`expect(x, "why").toBe(y)` prints `error: why`), when Bun printed Expected or
+ * Received under it. Crash messages count wherever they appear, except in quoted values and
+ * source excerpts.
  */
 export function failureKind(output: string): "assertion" | "other" {
-  const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
-  const fails = (clean.match(/^\(fail\) /gm) ?? []).length;
-  const errors = clean.match(/^error: .*$/gm) ?? [];
-  const assertions = errors.filter((e) => /^error: expect\(/.test(e));
-  if (!fails || CRASH.test(clean) || errors.length !== assertions.length || assertions.length < fails) return "other";
-  return "assertion";
+  const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n");
+  const fails = lines.filter((l) => /^\(fail\) /.test(l)).length;
+  const value = (l: string) => /^\s*(Expected|Received)\b|^\s*[-+] |^\s*\d+\s*\|/.test(l);
+  if (!fails || lines.some((l) => !value(l) && CRASH.test(l))) return "other";
+  let errors = 0, assertions = 0, open = false, isAssertion = false;
+  const close = () => {
+    if (open && isAssertion) assertions++;
+    open = false;
+  };
+  for (const l of lines) {
+    if (/^error: /.test(l)) {
+      close();
+      errors++;
+      open = true;
+      isAssertion = /^error: expect\(/.test(l);
+    } else if (/^\(fail\) /.test(l)) close();
+    else if (open && /^\s*(Expected|Received)\b|^- Expected|^\+ Received/.test(l)) isAssertion = true;
+  }
+  close();
+  return errors === assertions && assertions >= fails ? "assertion" : "other";
 }
 
 /** Bun prints string values escaped (\" and \n): compare text with the backslashes taken out. */

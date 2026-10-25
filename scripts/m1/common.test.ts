@@ -28,6 +28,11 @@ test("assertion only when every failing test failed on an expect", () => {
   expect(failureKind(`SyntaxError: Export named 'statusOf' not found in module 'hq/src/status.ts'.`)).toBe("other");
   expect(failureKind("error: Cannot find module './status'\n(fail) x")).toBe("other");
   expect(failureKind("exit 2, nothing printed")).toBe("other");
+  // an expect with its own message prints that message as the error line
+  expect(failureKind(`error: stderr says why: bad name\n\nExpected to contain: "bad name"\nReceived: "hq: not implemented"\n(fail) refused [1ms]\n 0 pass\n 1 fail`)).toBe("assertion");
+  expect(failureKind(`error: not implemented\n      at goalNew (src/goal.ts:3:9)\n(fail) a [1ms]\n 0 pass\n 1 fail`)).toBe("other");
+  // a crash word inside a received value is not a crash
+  expect(failureKind(`error: expect(received).toBe(expected)\nExpected: "x"\nReceived: "y is not defined"\n(fail) a [1ms]`)).toBe("assertion");
   // two failing tests but one assertion line: the other one failed some other way
   expect(failureKind(`error: expect(received).toBe(expected)\n(fail) a\n(fail) b\n 0 pass\n 2 fail`)).toBe("other");
 });
