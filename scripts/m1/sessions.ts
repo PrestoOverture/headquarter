@@ -7,7 +7,10 @@ import { join } from "node:path";
 import { answererSettings } from "../m0/settings";
 import { deniedReads, examDir, git } from "./common";
 
-export const TEST_CONFIG = [".hq.json", ".github", "goals", "bunfig.toml", "hq/package.json", "hq/bunfig.toml", "eval/package.json", "eval/bunfig.toml"];
+// What decides how an answer is tested. Not .github: M1 grades with the exam's run.sh and runs
+// the full tests from the starting point's .hq.json, so CI workflows decide nothing here, and
+// tasks t07, t08 and t13 have to change one (as M0's answers did).
+export const TEST_CONFIG = [".hq.json", "goals", "bunfig.toml", "hq/package.json", "hq/bunfig.toml", "eval/package.json", "eval/bunfig.toml"];
 
 /** Test configuration committed between two commits: the sandbox guards the working tree, not git plumbing (D30). */
 export function configTouched(dir: string, from: string, to: string): string[] {

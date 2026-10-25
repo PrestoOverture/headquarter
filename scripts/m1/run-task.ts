@@ -144,7 +144,7 @@ How to work:
 - The task is judged by hidden tests you cannot see. When they fail you get the names of the failing tests and their assertion messages only.
 - Read docs/architecture.md and the existing code under ${scope}/ first; match its style, naming, comment density and test style.
 - Run \`${check}\` and make it pass. Tests that need the sandbox runtime are skipped when SANDBOX_RUNTIME=1; that is expected.
-- Do not change files outside ${scope}/ except docs/architecture.md if a new module needs a line there. Do not change goals/, .hq.json, .github/, package.json or bunfig.toml files.
+- Do not change files outside ${scope}/ except docs/architecture.md if a new module needs a line there. Do not change goals/, .hq.json, package.json or bunfig.toml files.
 - Commit your work on the current branch with a clear message.
 - When done, say in two or three sentences what you built and how you tested it.${told() ? `\n\n${told()}` : ""}`;
   const log = join(out, `answer-${n}.jsonl`);
