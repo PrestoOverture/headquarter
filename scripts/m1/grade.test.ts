@@ -10,7 +10,10 @@ import { join } from "node:path";
 
 // Not under the temp directory (M1's sandboxes deny it), except inside srt (the merge lock's full
 // tests), where nothing here runs and only the temp directory is writable.
-process.env.HQ_M1_HOME ??= mkdtempSync(join(process.env.SANDBOX_RUNTIME ? tmpdir() : homedir(), ".hq-m1-test-"));
+// Bun shares the module cache across test files, so common.ts may have read HQ_M1_HOME already;
+// the task names below are unique either way, and this directory is removed either way.
+const testHome = mkdtempSync(join(process.env.SANDBOX_RUNTIME ? tmpdir() : homedir(), ".hq-m1-test-"));
+process.env.HQ_M1_HOME ??= testHome;
 const { examDir, git, M1_HOME, repo, runDir } = await import("./common");
 const { grade, judge } = await import("./grade");
 const { falsify } = await import("./falsify");
@@ -20,7 +23,7 @@ const id = Date.now().toString(36);
 const made: string[] = [];
 afterAll(() => {
   for (const d of made) rmSync(d, { recursive: true, force: true });
-  if (M1_HOME.includes(".hq-m1-test-")) rmSync(M1_HOME, { recursive: true, force: true });
+  rmSync(testHome, { recursive: true, force: true });
 });
 
 const commit = (dir: string, msg: string) => {

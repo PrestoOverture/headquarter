@@ -96,6 +96,7 @@ if (!s.stubCommit) {
       else if (first.tests.fail === 0) problems.push("no test failure was counted: the run stopped before bun test's summary (a stub that exits or hangs?)");
       else if (first.tests.skip > 0) problems.push(`${first.tests.skip} tests are skipped in the grader (SANDBOX_RUNTIME=1 is set there): no test may skip itself`);
       else if (first.kind !== "assertion") problems.push("tests fail, but not all on assertions (a missing export, a compile error, a throw or a timeout): fix the stubs or wrap the calls so every test fails on an expect");
+      else if (new Set(first.failing).size !== first.tests.fail) problems.push("every test needs its own name: the failing test names do not match the count");
       else if (first.sealed !== first.tests.fail) problems.push("the grader could not see your tests run: run.sh must run bun test from the repository root, once");
     }
     if (!problems.length) {
@@ -103,6 +104,7 @@ if (!s.stubCommit) {
       git(["merge", "--ff-only", "-q", "FETCH_HEAD"], dir);
       s.stubCommit = w.stubCommit;
       writeFileSync(join(examDir(task), "count"), String(first!.tests.fail));
+      writeFileSync(join(examDir(task), "names.json"), JSON.stringify(first!.failing));
       s.hiddenTests = first!.tests.fail;
       s.writerTests = w.reply;
     } else {
@@ -124,6 +126,8 @@ const scope: string = g.scope ?? "hq";
 const check: string = g.check ?? `cd ${scope} && bun test --timeout 30000 && bunx tsc --noEmit`;
 // What the last answer was told comes back on resume (s.notes); --notes adds review findings.
 let notes: string = [s.notes ?? "", o.notes ? readFileSync(o.notes, "utf8") : ""].filter(Boolean).join("\n\n");
+s.notes = notes; // a resumed rework run keeps its review findings
+save();
 while (s.answers.length < MAX_ANSWERS) {
   const n = s.answers.length + 1;
   const prompt = `You are working in ${dir}, a git repository, on branch answer. Implement this task:
@@ -184,6 +188,7 @@ How to work:
     const f = await falsify(task, dir, s.stubCommit, head, s.hiddenTests);
     hqRun("task", "gate", task, "falsify", f.ok ? "pass" : "fail", "--note", f.ok ? `reverted ${f.reverted.length} files: all hidden tests fail on assertions` : f.reason);
     s.falsify = f;
+    s.notes = ""; // passed: nothing carries over to a later rework run
     save();
     if (!f.ok) finish("falsify_failed", { head, reason: f.reason, log: f.log }, 7);
     finish("passed", { head, answers: n, dir, base: git(["rev-list", "--max-parents=0", "HEAD"], dir) });

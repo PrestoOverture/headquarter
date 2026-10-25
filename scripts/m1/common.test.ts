@@ -53,20 +53,24 @@ test("feedback drops lines carrying the hidden test code, whatever the code unde
   expect(f).not.toContain("statusOf");
 });
 
-test("feedback keeps only a few short lines of values the code under test chose, per failing test", () => {
+test("feedback trusts only known failing tests and gives the rest one small budget", () => {
   const long = "Q".repeat(1000);
-  const run = [`error: expect(received).toBe(expected)`, `Expected: "ok"`, `Received: "${long}"`, ...Array.from({ length: 10 }, (_, i) => `+ chunk${i}`), "(fail) a [1ms]", `error: expect(received).toBe(expected)`, `Received: "second"`, "(fail) b [1ms]"].join("\n");
-  const f = feedback(run);
-  expect(f.split("\n").find((l) => l.startsWith("Received: \"Q"))!.length).toBe(160);
-  expect(f).toContain("+ chunk2");
-  expect(f).not.toContain("+ chunk3"); // Received plus three diff lines for test a
-  expect(f).toContain('Received: "second"'); // the count starts again for test b
+  const run = [
+    "error: expect(received).toBe(expected)", 'Expected: "ok"', `Received: "${long}"`, ...Array.from({ length: 10 }, (_, i) => `+ chunk${i}`), "(fail) a [1ms]",
+    "error: expect(received).toBe(expected)", 'Received: "second"', "(fail) b [1ms]",
+    ...Array.from({ length: 50 }, (_, i) => `(fail) Zm9yZ2Vk${i}`), // printed by the code under test
+  ].join("\n");
+  const f = feedback(run, [], [], ["a", "b", "c"]).split("\n");
+  expect(f.filter((l) => l.startsWith("(fail)"))).toEqual(["(fail) a [1ms]", "(fail) b [1ms]"]);
+  expect(f.filter((l) => !l.startsWith("(fail)"))).toHaveLength(8); // 4 per known failing test
+  expect(f.find((l) => l.startsWith('Received: "Q'))!.length).toBe(160);
+  expect(feedback(run).split("\n").length).toBeLessThanOrEqual(52 + 4 * 52); // without names: still bounded per failing line
 });
 
 test("feedback strips color codes and caps its length", () => {
   expect(feedback("\x1b[31m(fail)\x1b[0m colored [1ms]")).toBe("(fail) colored [1ms]");
-  expect(feedback(Array.from({ length: 500 }, (_, i) => `(fail) t${i}`).join("\n")).split("\n")).toHaveLength(200);
-  expect(feedback(`Received: "${"x".repeat(1000)}"`).length).toBeLessThanOrEqual(400);
+  expect(feedback(Array.from({ length: 500 }, (_, i) => `(fail) t${i}`).join("\n"), [], [], ["t1", "t2"]).split("\n")).toHaveLength(2);
+  expect(feedback(`Received: "${"x".repeat(1000)}"\n(fail) t`).split("\n")[0]!.length).toBe(160);
 });
 
 test("a usage limit is read from the session's final error only, whatever the period", async () => {

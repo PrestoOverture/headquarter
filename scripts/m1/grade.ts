@@ -38,7 +38,7 @@ export function withPreload(toml: string, file: string): string {
 }
 
 type Run = { code: number; out: string; timedOut: boolean };
-export type Graded = { commit: string; passed: boolean; runs: number[]; timedOut: boolean; flaky: boolean; kind: "assertion" | "other" | null; tests: { pass: number; fail: number; skip: number }; sealed: number; suspect: boolean; feedback: string; log: string };
+export type Graded = { commit: string; passed: boolean; runs: number[]; timedOut: boolean; failing: string[]; flaky: boolean; kind: "assertion" | "other" | null; tests: { pass: number; fail: number; skip: number }; sealed: number; suspect: boolean; feedback: string; log: string };
 
 /**
  * A scratch worktree of `commit` (node_modules linked from the task's repository) under M1's
@@ -125,6 +125,8 @@ export async function grade(task: string, dir: string, commit: string, expected?
   const count = expected ?? (existsSync(join(exam, "count")) ? Number(readFileSync(join(exam, "count"), "utf8")) : undefined);
   const sources = files.map((f) => readFileSync(join(exam, "files", f), "utf8"));
   const script = readFileSync(join(exam, "run.sh"), "utf8");
+  // The test names of the writer's run on the stubs (run-task.ts): feedback trusts no other (fail) line.
+  const known: string[] | undefined = existsSync(join(exam, "names.json")) ? JSON.parse(readFileSync(join(exam, "names.json"), "utf8")) : undefined;
   const sealed = (out: string, secret: string) => [...out.matchAll(/^m1-seal (\S+) (\d+)$/gm)].filter((m) => m[1] === secret).reduce((a, m) => a + Number(m[2]), 0);
   // Each run in a fresh scratch worktree: what one run changed there cannot reach the rerun.
   const once = () => inScratch(task, dir, commit, ({ scratch, cfg, run }) => {
@@ -150,7 +152,7 @@ export async function grade(task: string, dir: string, commit: string, expected?
   // an answer that put a link where a hidden test goes.
   const suspect = runs.some((r) => r.linked) || last.out.split("\n").some((l) => /^\s*(Received|Expected|[-+] )/.test(l) && lines.some((s) => unescaped(l).includes(s)));
   return {
-    commit, passed, runs: runs.map((r) => r.code), timedOut: runs.some((r) => r.timedOut), flaky, kind: passed ? null : failureKind(last.out), tests: summary(last.out), sealed: last.sealed, suspect,
-    feedback: passed ? "" : feedback(last.out, files, sources), log,
+    commit, passed, runs: runs.map((r) => r.code), timedOut: runs.some((r) => r.timedOut), failing: failing(last.out), flaky, kind: passed ? null : failureKind(last.out), tests: summary(last.out), sealed: last.sealed, suspect,
+    feedback: passed ? "" : feedback(last.out, files, sources, known), log,
   };
 }

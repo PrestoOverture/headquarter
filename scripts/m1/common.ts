@@ -78,7 +78,9 @@ export function sh(cmd: string[], cwd: string, env?: Record<string, string>, tim
 }
 
 export function git(args: string[], cwd: string): string {
-  const r = sh(["git", ...args], cwd);
+  // No hooks and no fsmonitor: the orchestrator runs git, unsandboxed, in repositories an
+  // answerer or writer could write to.
+  const r = sh(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], cwd);
   if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.out.trim()}`);
   return r.out.trim();
 }
@@ -160,23 +162,33 @@ export function sourceLines(sources: string[]): string[] {
  * the hidden test files' names and any line carrying a line of the hidden tests (values the code
  * under test chose, such as a Received: holding a test file it read) are dropped.
  */
-const MAX_CHOSEN = 4;
+const PER_FAILURE = 4;
 
-export function feedback(output: string, hiddenFiles: string[] = [], sources: string[] = []): string {
+/**
+ * Feedback lines are trusted only as far as the code under test cannot forge them: it can print
+ * anything, (fail), error: and Expected lines included. So a (fail) line counts only for a test
+ * name the writer's run on the stubs saw (`known`), and every other line comes out of one budget
+ * of PER_FAILURE lines of 160 characters per such failing test.
+ */
+export function feedback(output: string, hiddenFiles: string[] = [], sources: string[] = [], known?: string[]): string {
   const names = hiddenFiles.map((f) => f.split("/").pop()!).filter(Boolean);
   const lines = sourceLines(sources);
+  const clean = output.split("\n").map((raw) => raw.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).filter((l) =>
+    !/^\s*\d+\s*\|/.test(l) && !/^\s*at\s/.test(l) // source excerpt, stack frame
+    && !(l.includes("/.hq-m1/") || l.includes(M1_HOME) || names.some((n) => l.includes(n)) || lines.some((s) => unescaped(l).includes(s))));
+  const failName = (l: string) => /^\(fail\) (.*?)(?: \[[\d.]+m?s\])?$/.exec(l)?.[1];
+  const failed = new Set(clean.map(failName).filter((n): n is string => !!n && (!known || known.includes(n))));
+  let budget = PER_FAILURE * failed.size;
+  const shown = new Set<string>();
   const keep: string[] = [];
-  let chosen = 0; // lines of values the code under test chose, in the current failing test
-  for (const raw of output.split("\n")) {
-    const l = raw.replace(/\x1b\[[0-9;]*m/g, "");
-    if (/^\s*\d+\s*\|/.test(l) || /^\s*at\s/.test(l)) continue; // source excerpt, stack frame
-    if (l.includes("/.hq-m1/") || l.includes(M1_HOME) || names.some((n) => l.includes(n)) || lines.some((s) => unescaped(l).includes(s))) continue;
-    if (/^\(fail\)/.test(l)) chosen = 0;
-    if (/^\s*Received|^\s*[-+] /.test(l)) {
-      // Received values and diffs come from the code under test, which can read the hidden tests:
-      // a few short lines per failing test, so encoded test code cannot come back in bulk.
-      if (++chosen <= MAX_CHOSEN) keep.push(l.trimEnd().slice(0, 160));
-    } else if (/^\(fail\)|^error:|^\s*Expected/.test(l)) keep.push(l.trimEnd().slice(0, 400));
+  for (const l of clean) {
+    const n = failName(l);
+    if (n !== undefined) {
+      if (failed.has(n) && !shown.has(n)) shown.add(n), keep.push(l.slice(0, 400));
+    } else if (/^error:|^\s*Expected|^\s*Received|^\s*[-+] /.test(l) && budget > 0) {
+      budget--;
+      keep.push(l.slice(0, 160));
+    }
   }
-  return keep.slice(0, 200).join("\n");
+  return keep.join("\n");
 }
