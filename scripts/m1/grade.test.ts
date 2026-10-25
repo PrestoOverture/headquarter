@@ -1,16 +1,18 @@
 // grade.ts and falsify.ts on a tiny repository and exam, no LLM: a stub fails on assertions, an
-// answer passes, reverting the answer is caught, flaky runs are caught, and the tests cannot write
+// answer passes, reverting the answer is caught, flaky runs are caught (judge), and the tests cannot write
 // the grader's configuration or read the real repository. They run srt, which cannot nest
 // (ADR-4), so they are skipped when SANDBOX_RUNTIME=1.
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.HQ_M1_HOME ??= mkdtempSync(join(homedir(), ".hq-m1-test-"));
+// Not under the temp directory (M1's sandboxes deny it), except inside srt (the merge lock's full
+// tests), where nothing here runs and only the temp directory is writable.
+process.env.HQ_M1_HOME ??= mkdtempSync(join(process.env.SANDBOX_RUNTIME ? tmpdir() : homedir(), ".hq-m1-test-"));
 const { examDir, git, M1_HOME, repo, runDir } = await import("./common");
-const { grade } = await import("./grade");
+const { grade, judge } = await import("./grade");
 const { falsify } = await import("./falsify");
 
 const run = process.env.SANDBOX_RUNTIME ? test.skip : test;
@@ -65,16 +67,19 @@ run("a stub fails on assertions, the answer passes, reverting it is caught", asy
   expect(f).toMatchObject({ ok: true, reverted: ["hq/src/add.ts"] });
 }, 120_000);
 
-run("runs that disagree are flaky", async () => {
-  // fails on the first run, passes on the rerun: the scratch worktree persists between them
-  const t = setup("flaky", `import { existsSync, writeFileSync } from "node:fs";\ntest("once", () => { const seen = existsSync(".seen"); writeFileSync(".seen", ""); expect(seen).toBe(true); });\n`);
-  const g = await grade(t.task, t.dir, t.answer, 1);
-  expect(g.flaky).toBe(true);
-  expect(g.passed).toBe(false);
-}, 120_000);
+test("runs that disagree on the result or on which tests fail are flaky", () => {
+  const pass = { code: 0, out: " 2 pass\n 0 fail", sealed: 2 };
+  const failA = { code: 1, out: "(fail) a [1ms]\n 1 pass\n 1 fail", sealed: 2 };
+  const failB = { code: 1, out: "(fail) b [1ms]\n 1 pass\n 1 fail", sealed: 2 };
+  expect(judge([pass], 2)).toEqual({ passed: true, flaky: false });
+  expect(judge([failA, failA], 2)).toEqual({ passed: false, flaky: false });
+  expect(judge([failA, pass], 2)).toEqual({ passed: false, flaky: true });
+  expect(judge([failA, failB], 2)).toEqual({ passed: false, flaky: true });
+  expect(judge([{ ...pass, sealed: 0 }], 2).passed).toBe(false); // a summary nobody counted
+});
 
 run("tests cannot write the grader's configuration or read the real repository", async () => {
-  const t = setup("sandbox", `${ADD}import { readFileSync, writeFileSync } from "node:fs";\ntest("sandboxed", () => {\n  expect(() => writeFileSync("../../cfg/run.sh", "exit 0")).toThrow();\n  expect(() => readFileSync(${JSON.stringify(join(repo, "package.json"))}, "utf8")).toThrow();\n});\n`);
+  const t = setup("sandbox", `${ADD}import { readFileSync, writeFileSync } from "node:fs";\ntest("sandboxed", () => {\n  expect(() => writeFileSync("../../cfg/run.sh", "exit 0")).toThrow();\n  expect(() => readFileSync(${JSON.stringify(join(repo, "hq", "src", "cli.ts"))}, "utf8")).toThrow();\n});\n`);
   const g = await grade(t.task, t.dir, t.answer, 3);
   expect(g.passed).toBe(true);
 }, 120_000);
@@ -108,4 +113,24 @@ run("tests can make git repositories in their temp directory", async () => {
   const t = setup("gitrepo", `${ADD}import { mkdtempSync } from "node:fs";\nimport { tmpdir } from "node:os";\nimport { join } from "node:path";\ntest("git init", () => {\n  const d = mkdtempSync(join(tmpdir(), "r-"));\n  expect(Bun.spawnSync(["git", "init", "-q", d]).exitCode).toBe(0);\n});\n`);
   const g = await grade(t.task, t.dir, t.answer, 3);
   expect(g.passed).toBe(true);
+}, 120_000);
+
+run("a link the answer committed on a hidden test's path is removed and reported", async () => {
+  const t = setup("link", ADD);
+  const outside = mkdtempSync(join(homedir(), ".hq-m1-link-"));
+  made.push(outside);
+  symlinkSync(outside, join(t.dir, "hq", "test"));
+  const linked = commit(t.dir, "link hq/test elsewhere");
+  const g = await grade(t.task, t.dir, linked, 2);
+  expect(g.passed).toBe(true);
+  expect(g.suspect).toBe(true);
+  expect(readdirSync(outside)).toEqual([]);
+}, 120_000);
+
+run("the rerun starts from a fresh worktree", async () => {
+  // the first run changes the code under test and fails; a reused worktree would pass the rerun
+  const t = setup("fresh", `import { writeFileSync } from "node:fs";\ntest("changes the code", () => { writeFileSync("src/add.ts", "export function add(a: number, b: number) { return a + b; }\\n"); expect(add(2, 3)).toBe(5); });\n`);
+  const g = await grade(t.task, t.dir, t.stub, 1);
+  expect(g.passed).toBe(false);
+  expect(g.flaky).toBe(false);
 }, 120_000);

@@ -74,7 +74,7 @@ if (!s.interfaces) {
 
 // 3. Writer: hidden tests and stubs; every test must fail first, on an assertion. One retry.
 if (!s.stubCommit) {
-  let notes = "";
+  let notes: string = s.writerNotes ?? ""; // kept in the state, so a resumed run still passes them on
   // An attempt counts once its session finished; one cut off by a usage limit is rerun.
   for (let attempt = (s.writerDone ?? 0) + 1; attempt <= 2 && !s.stubCommit; attempt++) {
     let w;
@@ -92,6 +92,8 @@ if (!s.stubCommit) {
       first = await grade(task, w.clone, w.stubCommit, Infinity);
       if (first.flaky) problems.push("the tests are flaky on the stubs");
       else if (first.tests.pass > 0) problems.push(`${first.tests.pass} tests pass on the stubs`);
+      else if (first.timedOut) problems.push("the tests did not finish within 20 minutes");
+      else if (first.tests.fail === 0) problems.push("no test failure was counted: the run stopped before bun test's summary (a stub that exits or hangs?)");
       else if (first.tests.skip > 0) problems.push(`${first.tests.skip} tests are skipped in the grader (SANDBOX_RUNTIME=1 is set there): no test may skip itself`);
       else if (first.kind !== "assertion") problems.push("tests fail, but not all on assertions (a missing export, a compile error, a throw or a timeout): fix the stubs or wrap the calls so every test fails on an expect");
       else if (first.sealed !== first.tests.fail) problems.push("the grader could not see your tests run: run.sh must run bun test from the repository root, once");
@@ -104,7 +106,7 @@ if (!s.stubCommit) {
       s.hiddenTests = first!.tests.fail;
       s.writerTests = w.reply;
     } else {
-      notes = `A check of your previous attempt failed: ${problems.join("; ")}. Fix it.`;
+      notes = s.writerNotes = `A check of your previous attempt failed: ${problems.join("; ")}. Fix it.`;
       console.error(`writer attempt ${attempt}: ${notes}`);
     }
     save();
@@ -120,9 +122,8 @@ const c = criteriaOf(dir, task);
 const g = JSON.parse(readFileSync(join(dir, "goals", `${task}.json`), "utf8"));
 const scope: string = g.scope ?? "hq";
 const check: string = g.check ?? `cd ${scope} && bun test --timeout 30000 && bunx tsc --noEmit`;
-// On resume after a failed answer, its feedback goes to the next answer too.
-const lastFail = s.answers.at(-1)?.feedback ? s.answers.at(-1) : null;
-let notes = [lastFail ? `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${lastFail.feedback}` : "", o.notes ? readFileSync(o.notes, "utf8") : ""].filter(Boolean).join("\n\n");
+// What the last answer was told comes back on resume (s.notes); --notes adds review findings.
+let notes: string = [s.notes ?? "", o.notes ? readFileSync(o.notes, "utf8") : ""].filter(Boolean).join("\n\n");
 while (s.answers.length < MAX_ANSWERS) {
   const n = s.answers.length + 1;
   const prompt = `You are working in ${dir}, a git repository, on branch answer. Implement this task:
@@ -151,6 +152,15 @@ How to work:
   }
   hqRun("task", "gate", task, "self_test", "pass", "--claimed-done", "--note", `answer ${n}`);
   const head = git(["rev-parse", "HEAD"], dir);
+  // The graded commit must be the one the reviews see (review-gates.ts reviews branch answer).
+  const branch = sh(["git", "symbolic-ref", "--short", "-q", "HEAD"], dir).out.trim();
+  if (branch !== "answer") {
+    s.answers.push({ n, head, passed: false, offBranch: branch || "detached" });
+    s.notes = notes = `Your answer was not graded: the repository is on ${branch || "a detached HEAD"}, not on branch answer. Check out branch answer and commit your work there.`;
+    save();
+    hqRun("task", "gate", task, "hidden_tests", "fail", "--claimed-done", "--note", `answer ${n}: not on branch answer; not graded`);
+    continue;
+  }
   // D30 holds in git too: an answer that commits test configuration or goal files (for example by
   // git plumbing, past the working-tree sandbox) is not graded.
   const touched = configTouched(dir, s.stubCommit, head);
@@ -158,14 +168,15 @@ How to work:
     s.answers.push({ n, head, passed: false, configTouched: touched });
     save();
     hqRun("task", "gate", task, "hidden_tests", "fail", "--claimed-done", "--note", `answer ${n}: commits test configuration ${touched.join(", ")}; not graded (D30)`);
-    notes = `Your answer was not graded: it changes ${touched.join(", ")}, which you may not change. Take those changes out (a new commit) and keep to the task.`;
+    s.notes = notes = `Your answer was not graded: it changes ${touched.join(", ")}, which you may not change. Take those changes out (a new commit) and keep to the task.`;
+    save();
     continue;
   }
   const gr = await grade(task, dir, head);
   s.answers.push({ n, head, passed: gr.passed, flaky: gr.flaky, kind: gr.kind, tests: gr.tests, sealed: gr.sealed, suspect: gr.suspect, log: gr.log, feedback: gr.feedback });
   save();
   if (gr.flaky) {
-    hqRun("task", "gate", task, "hidden_tests", "fail", "--note", `answer ${n}: hidden tests flaky on the same code (D36): back to the writer`);
+    hqRun("task", "gate", task, "hidden_tests", "fail", "--note", `answer ${n}: hidden tests flaky on the same code (D36): the run stops for a decision`);
     finish("flaky", { log: gr.log }, 4);
   }
   hqRun("task", "gate", task, "hidden_tests", gr.passed ? "pass" : "fail", "--claimed-done", "--note", `answer ${n}: ${gr.tests.pass} pass, ${gr.tests.fail} fail${gr.passed ? "" : `, ${gr.kind}`}${gr.sealed !== gr.tests.pass + gr.tests.fail ? `, seal counted ${gr.sealed}` : ""}${gr.suspect ? ", output carries hidden test code" : ""}`);
@@ -178,6 +189,7 @@ How to work:
     finish("passed", { head, answers: n, dir, base: git(["rev-list", "--max-parents=0", "HEAD"], dir) });
   }
   // No totals: the answerer gets which tests failed and why, not the size of the exam.
-  notes = `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${gr.feedback}`;
+  s.notes = notes = `Hidden tests failed on your answer. The failing tests and their assertion messages:\n${gr.feedback}`;
+  save();
 }
 finish("out_of_answers", { answers: s.answers.length }, 5);

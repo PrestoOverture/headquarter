@@ -65,6 +65,7 @@ Your tests must fail on this checkout with the stubs, every one of them on an as
     ...(files.some((f) => TEST_PATH.test(f)) ? [] : ["no test files in the exam"]),
     ...stubFiles.filter((f) => TEST_PATH.test(f)).map((f) => `the stub commit contains a test file: ${f}`),
     ...(Number(git(["rev-list", "--count", `${start}..${stubCommit}`], clone)) > 1 ? ["more than one stub commit"] : []),
+    ...stubFiles.filter((f) => files.includes(f)).map((f) => `the stub commit contains a hidden test file: ${f}`),
     ...(stubCommit === start ? [] : configTouched(clone, start, stubCommit).map((f) => `the stub commit changes ${f}, which no session may change`)),
     ...(status ? [`uncommitted changes left in the writer's checkout:\n${status}`] : []),
   ];

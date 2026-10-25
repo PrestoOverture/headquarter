@@ -160,15 +160,23 @@ export function sourceLines(sources: string[]): string[] {
  * the hidden test files' names and any line carrying a line of the hidden tests (values the code
  * under test chose, such as a Received: holding a test file it read) are dropped.
  */
+const MAX_CHOSEN = 4;
+
 export function feedback(output: string, hiddenFiles: string[] = [], sources: string[] = []): string {
   const names = hiddenFiles.map((f) => f.split("/").pop()!).filter(Boolean);
   const lines = sourceLines(sources);
   const keep: string[] = [];
+  let chosen = 0; // lines of values the code under test chose, in the current failing test
   for (const raw of output.split("\n")) {
     const l = raw.replace(/\x1b\[[0-9;]*m/g, "");
     if (/^\s*\d+\s*\|/.test(l) || /^\s*at\s/.test(l)) continue; // source excerpt, stack frame
     if (l.includes("/.hq-m1/") || l.includes(M1_HOME) || names.some((n) => l.includes(n)) || lines.some((s) => unescaped(l).includes(s))) continue;
-    if (/^\(fail\)|^error:|^\s*Expected|^\s*Received|^\s*[-+] /.test(l)) keep.push(l.trimEnd().slice(0, 400));
+    if (/^\(fail\)/.test(l)) chosen = 0;
+    if (/^\s*Received|^\s*[-+] /.test(l)) {
+      // Received values and diffs come from the code under test, which can read the hidden tests:
+      // a few short lines per failing test, so encoded test code cannot come back in bulk.
+      if (++chosen <= MAX_CHOSEN) keep.push(l.trimEnd().slice(0, 160));
+    } else if (/^\(fail\)|^error:|^\s*Expected/.test(l)) keep.push(l.trimEnd().slice(0, 400));
   }
   return keep.slice(0, 200).join("\n");
 }

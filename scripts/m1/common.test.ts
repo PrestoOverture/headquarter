@@ -53,6 +53,16 @@ test("feedback drops lines carrying the hidden test code, whatever the code unde
   expect(f).not.toContain("statusOf");
 });
 
+test("feedback keeps only a few short lines of values the code under test chose, per failing test", () => {
+  const long = "Q".repeat(1000);
+  const run = [`error: expect(received).toBe(expected)`, `Expected: "ok"`, `Received: "${long}"`, ...Array.from({ length: 10 }, (_, i) => `+ chunk${i}`), "(fail) a [1ms]", `error: expect(received).toBe(expected)`, `Received: "second"`, "(fail) b [1ms]"].join("\n");
+  const f = feedback(run);
+  expect(f.split("\n").find((l) => l.startsWith("Received: \"Q"))!.length).toBe(160);
+  expect(f).toContain("+ chunk2");
+  expect(f).not.toContain("+ chunk3"); // Received plus three diff lines for test a
+  expect(f).toContain('Received: "second"'); // the count starts again for test b
+});
+
 test("feedback strips color codes and caps its length", () => {
   expect(feedback("\x1b[31m(fail)\x1b[0m colored [1ms]")).toBe("(fail) colored [1ms]");
   expect(feedback(Array.from({ length: 500 }, (_, i) => `(fail) t${i}`).join("\n")).split("\n")).toHaveLength(200);

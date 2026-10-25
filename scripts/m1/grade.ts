@@ -2,8 +2,8 @@
 // worktree, inside srt (D35) with writes allowed only to that scratch worktree and a temp directory of its own (no shared temp
 // directory, so code under test cannot leave the tests anywhere the answerer can read later) and
 // reads denied as for every M1 session (deniedReads). The sandbox settings, run.sh and the seal
-// sit beside the worktree, outside what the tests can write, so a first run cannot change the
-// rerun. The answerer's working tree is never touched and never holds the test files.
+// sit beside the worktree, outside what the tests can write, and the rerun gets a fresh
+// worktree, so a first run cannot change the rerun. The answerer's working tree is never touched and never holds the test files.
 //
 // A run passes only when every bun test summary adds up to the exam's test count, with no
 // failing or skipped test, and the seal agrees: a preload (bunfig.toml in the scratch worktree)
@@ -11,8 +11,8 @@
 // test never sees, so printing a fake summary and exiting does not pass. A failing run is rerun
 // once on the same code; runs that disagree on the result or on which tests fail are flaky (D36).
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { deniedReads, examDir, failing, failureKind, feedback, git, repo, runDir, scratchDir, sh, sourceLines, summary, unescaped } from "./common";
 import { hiddenFiles } from "./writer";
 
@@ -38,7 +38,7 @@ export function withPreload(toml: string, file: string): string {
 }
 
 type Run = { code: number; out: string; timedOut: boolean };
-export type Graded = { commit: string; passed: boolean; runs: number[]; flaky: boolean; kind: "assertion" | "other" | null; tests: { pass: number; fail: number; skip: number }; sealed: number; suspect: boolean; feedback: string; log: string };
+export type Graded = { commit: string; passed: boolean; runs: number[]; timedOut: boolean; flaky: boolean; kind: "assertion" | "other" | null; tests: { pass: number; fail: number; skip: number }; sealed: number; suspect: boolean; feedback: string; log: string };
 
 /**
  * A scratch worktree of `commit` (node_modules linked from the task's repository) under M1's
@@ -76,6 +76,48 @@ export async function inScratch<T>(task: string, dir: string, commit: string, us
   }
 }
 
+/** One run passes: every test ran (the seal agrees) and passed, none skipped, as many as the exam has. */
+export function passes(r: { code: number; out: string; sealed: number }, count?: number): boolean {
+  const s = summary(r.out);
+  return r.code === 0 && s.fail === 0 && s.skip === 0 && s.pass > 0 && failing(r.out).length === 0 && r.sealed === s.pass && (count === undefined || s.pass === count);
+}
+
+/** A grading passes when every run passed; runs that disagree on that or on which tests failed are flaky (D36). */
+export function judge(runs: { code: number; out: string; sealed: number }[], count?: number) {
+  const results = runs.map((r) => passes(r, count));
+  return { passed: results.every(Boolean), flaky: new Set(results).size > 1 || new Set(runs.map((r) => failing(r.out).join("\n"))).size > 1 };
+}
+
+/**
+ * Puts the hidden tests into the scratch worktree. A symbolic link the answer committed on a
+ * hidden test's path (to send the copy somewhere it can read later) is removed first and
+ * reported: the copy is made outside the sandbox.
+ */
+function placeTests(exam: string, files: string[], scratch: string): boolean {
+  let linked = false;
+  for (const f of files) {
+    const parts = f.split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const p = join(scratch, ...parts.slice(0, i));
+      let st;
+      try {
+        st = lstatSync(p);
+      } catch {
+        break;
+      }
+      if (st.isSymbolicLink()) {
+        rmSync(p);
+        linked = true;
+        break;
+      }
+    }
+    mkdirSync(dirname(join(scratch, f)), { recursive: true });
+    rmSync(join(scratch, f), { force: true });
+    copyFileSync(join(exam, "files", f), join(scratch, f));
+  }
+  return linked;
+}
+
 export async function grade(task: string, dir: string, commit: string, expected?: number): Promise<Graded> {
   const exam = examDir(task);
   const files = hiddenFiles(task);
@@ -83,38 +125,32 @@ export async function grade(task: string, dir: string, commit: string, expected?
   const count = expected ?? (existsSync(join(exam, "count")) ? Number(readFileSync(join(exam, "count"), "utf8")) : undefined);
   const sources = files.map((f) => readFileSync(join(exam, "files", f), "utf8"));
   const script = readFileSync(join(exam, "run.sh"), "utf8");
-  return inScratch(task, dir, commit, ({ scratch, cfg, run }) => {
-    cpSync(join(exam, "files"), scratch, { recursive: true });
+  const sealed = (out: string, secret: string) => [...out.matchAll(/^m1-seal (\S+) (\d+)$/gm)].filter((m) => m[1] === secret).reduce((a, m) => a + Number(m[2]), 0);
+  // Each run in a fresh scratch worktree: what one run changed there cannot reach the rerun.
+  const once = () => inScratch(task, dir, commit, ({ scratch, cfg, run }) => {
+    const linked = placeTests(exam, files, scratch);
     writeFileSync(join(cfg, "seal.ts"), SEAL);
     for (const d of ["", "hq", "eval"]) {
       const f = join(scratch, d, "bunfig.toml");
       if (existsSync(join(scratch, d))) writeFileSync(f, withPreload(existsSync(f) ? readFileSync(f, "utf8") : "", join(cfg, "seal.ts")));
     }
-    const sealed = (out: string, secret: string) => [...out.matchAll(/^m1-seal (\S+) (\d+)$/gm)].filter((m) => m[1] === secret).reduce((a, m) => a + Number(m[2]), 0);
-    const once = () => {
-      const secret = crypto.randomUUID();
-      const r = run(script, { M1_SEAL: secret });
-      return { ...r, sealed: sealed(r.out, secret), out: r.out.replaceAll(secret, "<seal>") };
-    };
-    const ok = (r: Run & { sealed: number }) => {
-      const s = summary(r.out);
-      return r.code === 0 && s.fail === 0 && s.skip === 0 && s.pass > 0 && failing(r.out).length === 0 && r.sealed === s.pass && (count === undefined || s.pass === count);
-    };
-    const runs = [once()];
-    if (!ok(runs[0]!)) runs.push(once());
-    const passes = runs.map(ok);
-    const flaky = new Set(passes).size > 1 || new Set(runs.map((r) => failing(r.out).join("\n"))).size > 1;
-    const output = runs.map((r) => r.out).join("\n--- rerun ---\n");
-    const log = join(runDir(task), `grade-${commit.slice(0, 12)}-${Date.now()}.log`);
-    writeFileSync(log, output);
-    const passed = passes.every(Boolean);
-    const last = runs.at(-1)!;
-    const lines = sourceLines(sources);
-    // Code under test that prints the hidden tests (it can read them in the scratch worktree).
-    const suspect = last.out.split("\n").some((l) => /^\s*(Received|Expected|[-+] )/.test(l) && lines.some((s) => unescaped(l).includes(s)));
-    return {
-      commit, passed, runs: runs.map((r) => r.code), flaky, kind: passed ? null : failureKind(last.out), tests: summary(last.out), sealed: last.sealed, suspect,
-      feedback: passed ? "" : feedback(last.out, files, sources), log,
-    };
+    const secret = crypto.randomUUID();
+    const r = run(script, { M1_SEAL: secret });
+    return { ...r, linked, sealed: sealed(r.out, secret), out: r.out.replaceAll(secret, "<seal>") };
   });
+  const runs = [await once()];
+  if (!passes(runs[0]!, count)) runs.push(await once());
+  const { passed, flaky } = judge(runs, count);
+  const output = runs.map((r) => r.out).join("\n--- rerun ---\n");
+  const log = join(runDir(task), `grade-${commit.slice(0, 12)}-${Date.now()}.log`);
+  writeFileSync(log, output);
+  const last = runs.at(-1)!;
+  const lines = sourceLines(sources);
+  // Code under test that prints the hidden tests (it can read them in the scratch worktree), or
+  // an answer that put a link where a hidden test goes.
+  const suspect = runs.some((r) => r.linked) || last.out.split("\n").some((l) => /^\s*(Received|Expected|[-+] )/.test(l) && lines.some((s) => unescaped(l).includes(s)));
+  return {
+    commit, passed, runs: runs.map((r) => r.code), timedOut: runs.some((r) => r.timedOut), flaky, kind: passed ? null : failureKind(last.out), tests: summary(last.out), sealed: last.sealed, suspect,
+    feedback: passed ? "" : feedback(last.out, files, sources), log,
+  };
 }
