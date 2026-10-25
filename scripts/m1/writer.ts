@@ -47,7 +47,7 @@ Interface list (fixed; use exactly these names, signatures and outputs):
 ${ifaces}
 
 Write:
-1. Hidden tests in ${exam}/files/, laid out at the repository-relative paths they run from (for example ${exam}/files/hq/test/m1-${task}.test.ts). Use bun test and the repository's existing test style. At least one assertion per acceptance criterion; assert the business result the criterion describes, not implementation details; no smoke tests. Name the files m1-*.test.ts.
+1. Hidden tests in ${exam}/files/, laid out at the repository-relative paths they run from (for example ${exam}/files/hq/test/${task}.test.ts). Use bun test and the repository's existing test style. At least one assertion per acceptance criterion; assert the business result the criterion describes, not implementation details; no smoke tests. Name the files m1-*.test.ts.
 2. ${exam}/run.sh: a bash script that, run from the repository root, runs only your tests (\`bun test --timeout 30000 <paths>\`, one call, from the repository root) and exits 0 only if all of them pass. The grader runs them in a sandbox with SANDBOX_RUNTIME=1 set: none of your tests may skip itself there.
 3. Stubs: for every interface marked new, the smallest code in this checkout that makes it exist with the listed name and signature but no behavior (functions that throw or return a placeholder, a command that exits with an error). Commit the stubs on the current branch. Do not implement the task, and commit no test files.
 
