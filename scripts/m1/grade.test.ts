@@ -103,3 +103,9 @@ run("falsify fails when the hidden tests still pass with the implementation reve
   expect(f.ok).toBe(false);
   expect(f.reason).toContain("still pass");
 }, 120_000);
+
+run("tests can make git repositories in their temp directory", async () => {
+  const t = setup("gitrepo", `${ADD}import { mkdtempSync } from "node:fs";\nimport { tmpdir } from "node:os";\nimport { join } from "node:path";\ntest("git init", () => {\n  const d = mkdtempSync(join(tmpdir(), "r-"));\n  expect(Bun.spawnSync(["git", "init", "-q", d]).exitCode).toBe(0);\n});\n`);
+  const g = await grade(t.task, t.dir, t.answer, 3);
+  expect(g.passed).toBe(true);
+}, 120_000);

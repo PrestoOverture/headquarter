@@ -1,5 +1,5 @@
 // M1 grader: runs a task's hidden tests on a commit of the task's repository, in a scratch
-// worktree, inside srt (D35) with writes allowed only to that scratch worktree (no shared temp
+// worktree, inside srt (D35) with writes allowed only to that scratch worktree and a temp directory of its own (no shared temp
 // directory, so code under test cannot leave the tests anywhere the answerer can read later) and
 // reads denied as for every M1 session (deniedReads). The sandbox settings, run.sh and the seal
 // sit beside the worktree, outside what the tests can write, so a first run cannot change the
@@ -49,13 +49,17 @@ export async function inScratch<T>(task: string, dir: string, commit: string, us
   const outer = mkdtempSync(join(scratchDir(), `${task}-`));
   const scratch = join(outer, "wt");
   const cfg = join(outer, "cfg");
+  // The run's own temp directory, beside the worktree: srt denies writing .git/hooks and
+  // .git/config anywhere beneath its working directory, which would stop tests making repositories.
+  const tmp = join(outer, "tmp");
   mkdirSync(cfg);
+  mkdirSync(tmp);
   try {
     git(["worktree", "add", "--detach", "-q", scratch, commit], dir);
     for (const d of ["hq", "eval"]) if (existsSync(join(dir, d, "node_modules")) && existsSync(join(scratch, d))) symlinkSync(join(dir, d, "node_modules"), join(scratch, d, "node_modules"));
     const { srtSettings } = await import(join(repo, "hq/src/sandbox.ts"));
     const settings = srtSettings({ writable: [scratch], commonDir: join(dir, ".git") });
-    settings.filesystem.allowWrite = [scratch]; // not the shared temp directory
+    settings.filesystem.allowWrite = [scratch, tmp]; // not the shared temp directory
     settings.filesystem.denyRead = [...(settings.filesystem.denyRead ?? []), ...deniedReads(task, { exam: true, scratch: false })];
     const settingsFile = join(cfg, "srt.json");
     writeFileSync(settingsFile, JSON.stringify(settings));
@@ -63,7 +67,7 @@ export async function inScratch<T>(task: string, dir: string, commit: string, us
     const run = (script: string, env: Record<string, string> = {}) => {
       const file = join(cfg, `run-${++n}.sh`);
       writeFileSync(file, script);
-      return sh([SRT, "-s", settingsFile, "-c", `export TMPDIR="$PWD/.m1-tmp"; mkdir -p "$TMPDIR" && bash ${JSON.stringify(file)}`], scratch, env, RUN_TIMEOUT);
+      return sh([SRT, "-s", settingsFile, "-c", `export TMPDIR=${JSON.stringify(tmp)}; bash ${JSON.stringify(file)}`], scratch, { ...env, CLAUDE_CODE_TMPDIR: tmp }, RUN_TIMEOUT);
     };
     return use({ scratch, cfg, run });
   } finally {
