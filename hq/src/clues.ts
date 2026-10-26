@@ -30,7 +30,7 @@ const CALLS = [
   /(?<![.\w])(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|fetch)\s*\(/,
 ];
 const RUST_CALLS = [/\bCommand::new\b/, /\bTcpStream::connect\b/];
-const C_CALLS = [/(?<![.\w])(?:system|popen|fork|execv|execvp|execve|execl|execlp|socket|connect)\s*\(/];
+const C_CALLS = [/(?<![.\w])(?:system|popen|fork|execv|execvp|execve|execl|execlp|posix_spawn|posix_spawnp|socket|connect)\s*\(/];
 
 /** The module a line imports, or none: the quoted specifier (TS), the path without its last segment (Rust), the header (C). */
 export function importedModules(path: string, text: string): string[] {

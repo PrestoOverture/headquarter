@@ -109,6 +109,25 @@ describe("hq trace", () => {
     expect(r.out).not.toContain("g1: one");
   });
 
+  test("a top-level acceptance list is the criteria of the goal's single task", () => {
+    goalFile({ title: "t", criteria: ["one", "two"], acceptance: [{ text: "does one", traces: "g1" }, { text: "does two", traces: "g2" }] });
+    const ok = hq("trace", "g");
+    expect(ok.out).toContain("trace ok: 2 goal criteria");
+    expect(ok.code).toBe(0);
+  });
+
+  test("a single-task goal file's bare criteria are untraced under the goal's name; the multi-task form ignores the top level", () => {
+    goalFile({ title: "t", criteria: ["one"], acceptance: [{ text: "does one", traces: "g1" }, "a bare string"] });
+    const r = hq("trace", "g");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("g#2: a bare string");
+    expect(r.out).not.toContain("goal criteria no task traces to");
+    git(["worktree", "remove", "--force", join(root, "repo.goals/g")], repo);
+    git(["branch", "-qD", "goal/g"], repo);
+    goalFile({ ...clean, acceptance: ["goal-level prose, not a task's"] });
+    expect(hq("trace", "g").code).toBe(0);
+  });
+
   test("a goal with no criteria and no tasks is clean", () => {
     goalFile({ title: "t" });
     expect(hq("trace", "g").code).toBe(0);

@@ -1,7 +1,8 @@
 // `hq trace <goal>`: does every task-level acceptance criterion serve a goal-level one, and is every
 // goal-level one served? goals/<goal>.json (at the branch head) has a top-level `criteria` list, whose
-// entries are g1, g2, ... by position; a task criterion in tasks.<task>.acceptance is a string, or
-// {"text": ..., "traces": "g2"} to say which goal criterion it serves. With a checker command, each
+// entries are g1, g2, ... by position; a task criterion in tasks.<task>.acceptance (or, for a goal
+// file without tasks, the top-level acceptance) is a string, or {"text": ..., "traces": "g2"} to say
+// which goal criterion it serves. With a checker command, each
 // trace is also put to a session that did not write it.
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -52,15 +53,20 @@ export function readCriteria(cwd: string, goal: string): { goal: GoalCriterion[]
   }
   const list = file?.criteria ?? [];
   if (!Array.isArray(list) || !list.every((c: unknown) => typeof c === "string")) throw new Error(`${where}: criteria must be a list of strings`);
+  // A goal file without tasks (the single-task form) keeps its task's criteria in a top-level
+  // `acceptance` list; that task goes by the goal's name. With tasks, the top level is not read.
+  const multi = Object.entries<any>(file?.tasks ?? {});
+  const sources: [string, string, unknown][] = multi.length
+    ? multi.map(([task, t]) => [task, `tasks.${task}.acceptance`, t?.acceptance ?? []])
+    : [[goal, "acceptance", file?.acceptance ?? []]];
   const tasks: TaskCriterion[] = [];
-  for (const [task, t] of Object.entries<any>(file?.tasks ?? {})) {
-    const acceptance = t?.acceptance ?? [];
-    if (!Array.isArray(acceptance)) throw new Error(`${where}: tasks.${task}.acceptance must be a list`);
+  for (const [task, path, acceptance] of sources) {
+    if (!Array.isArray(acceptance)) throw new Error(`${where}: ${path} must be a list`);
     acceptance.forEach((a: any, i: number) => {
       const text = typeof a === "string" ? a : a?.text;
       const traces = typeof a === "string" ? undefined : a?.traces;
       if (typeof text !== "string" || (traces !== undefined && typeof traces !== "string")) {
-        throw new Error(`${where}: tasks.${task}.acceptance[${i}] must be a string or {"text": string, "traces": string}`);
+        throw new Error(`${where}: ${path}[${i}] must be a string or {"text": string, "traces": string}`);
       }
       tasks.push({ task, n: i + 1, text, traces });
     });
