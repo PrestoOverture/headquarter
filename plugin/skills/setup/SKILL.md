@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Prepare the current repository for hq: check the hq launcher is installed, install the main-ref guard hook, and write .hq.json with the full-test command. Use when the user wants to start using hq in a repository.
+description: "Prepare the current repository for hq: check the hq launcher is installed, install the main-ref guard hook, and write .hq.json with the full-test command. Use when the user wants to start using hq in a repository."
 ---
 
 # Set up this repository for hq

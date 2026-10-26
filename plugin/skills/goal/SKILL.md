@@ -1,6 +1,6 @@
 ---
 name: goal
-description: Take a goal through the hq flow: write acceptance criteria with the user, start the goal branch, run each task in a sandboxed session, run the gates, and ask the user to approve and merge in a terminal. Use when the user wants to build a feature or fix with hq.
+description: "Take a goal through the hq flow: write acceptance criteria with the user, start the goal branch, run each task in a sandboxed session, run the gates, and ask the user to approve and merge in a terminal. Use when the user wants to build a feature or fix with hq."
 ---
 
 # Take a goal from criteria to merge
@@ -36,7 +36,9 @@ Run these for each task and record each result with `hq task gate <task> <gate> 
 2. `codex_review`: `hq review <goal> --task <task>`. It runs Codex and records the gate itself, so do not record it again.
 3. `claude_diff`: a review by a session that is not the author. Do not read the diff and judge it in this session. Start a fresh one, read-only, in the worktree, and have it read the diff against the task's base:
 
-   `git diff <base>..goal/<goal> | claude -p --no-session-persistence --allowedTools Read Grep Glob "Review this diff line by line against these acceptance criteria: <criteria>. Report each real defect with file and line. Finish with exactly PASS or FAIL."`
+   `{ echo "Review the diff below line by line against these acceptance criteria: <criteria>. Report each real defect with file and line. Finish with exactly PASS or FAIL."; git diff <base>..goal/<goal>; } | claude -p --no-session-persistence --allowedTools Read Grep Glob`
+
+   The prompt and the diff go in together on stdin. `--allowedTools` takes any number of values, so a prompt argument after it would be read as another tool name and the reviewer would never see the criteria; keep that flag last and give no prompt argument.
 
    Record the verdict with `hq task gate <task> claude_diff <pass|fail> --note "<one-line summary>"`.
 4. `full_tests`: once every task is done, run `hq report <goal>`. It makes the five-column report and runs the full tests on a trial merge with the latest main. Record `hq task gate <last-task> full_tests <pass|fail>` from its result.

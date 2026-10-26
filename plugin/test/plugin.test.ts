@@ -9,12 +9,14 @@ const CLI = join(PLUGIN, "../hq/src/cli.ts");
 const json = (path: string) => JSON.parse(readFileSync(join(PLUGIN, path), "utf8"));
 const skills = readdirSync(join(PLUGIN, "skills"));
 
-/** The `---` block at the top of a SKILL.md as key/value pairs. */
-function frontmatter(text: string): Record<string, string> {
+/** The `---` block at the top of a SKILL.md, parsed as YAML. */
+function frontmatter(text: string): Record<string, unknown> {
   const m = text.match(/^---\n([\s\S]*?)\n---\n/);
   if (!m) throw new Error("no frontmatter");
-  return Object.fromEntries(m[1]!.split("\n").map((l) => [l.slice(0, l.indexOf(":")), l.slice(l.indexOf(":") + 1).trim()]));
+  return Bun.YAML.parse(m[1]!) as Record<string, unknown>;
 }
+
+const skillText = (skill: string) => readFileSync(join(PLUGIN, "skills", skill, "SKILL.md"), "utf8");
 
 test("plugin.json names the plugin hq", () => {
   const p = json(".claude-plugin/plugin.json");
@@ -38,9 +40,10 @@ test("the setup and goal skills exist", () => {
 
 for (const skill of ["setup", "goal"]) {
   test(`skill ${skill} has frontmatter with its name and a description`, () => {
-    const f = frontmatter(readFileSync(join(PLUGIN, "skills", skill, "SKILL.md"), "utf8"));
+    const f = frontmatter(skillText(skill));
     expect(f.name).toBe(skill);
-    expect(f.description.length).toBeGreaterThan(40);
+    expect(typeof f.description).toBe("string");
+    expect((f.description as string).length).toBeGreaterThan(40);
   });
 }
 
@@ -66,7 +69,7 @@ function mentioned(text: string): Set<string> {
 
 for (const skill of ["setup", "goal"]) {
   test(`every hq subcommand skill ${skill} mentions is in the usage of cli.ts`, () => {
-    const found = mentioned(readFileSync(join(PLUGIN, "skills", skill, "SKILL.md"), "utf8"));
+    const found = mentioned(skillText(skill));
     expect(found.size).toBeGreaterThan(0);
     const text = usage();
     for (const sub of found) expect(text, `hq ${sub}`).toContain(`hq ${sub}`);
@@ -74,7 +77,7 @@ for (const skill of ["setup", "goal"]) {
 }
 
 test("together the skills mention the whole flow", () => {
-  const all = new Set(skills.flatMap((s) => [...mentioned(readFileSync(join(PLUGIN, "skills", s, "SKILL.md"), "utf8"))]));
+  const all = new Set(skills.flatMap((s) => [...mentioned(skillText(s))]));
   for (const sub of ["install-hook", "goal new", "work", "review", "report", "task gate", "approve", "merge"]) expect(all.has(sub), sub).toBe(true);
 });
 
@@ -82,6 +85,18 @@ test("the goal skill leaves approve and merge to the user", () => {
   const text = readFileSync(join(PLUGIN, "skills/goal/SKILL.md"), "utf8");
   expect(text).toContain("never approve");
   expect(text).toContain("yourself");
+});
+
+test("the Claude review command gives the prompt on stdin, not after a variadic flag", () => {
+  const text = skillText("goal");
+  const cmd = text.split("\n").find((l) => l.includes("claude -p") && l.includes("--allowedTools"));
+  expect(cmd, "review command").toBeTruthy();
+  const args = cmd!.slice(cmd!.indexOf("claude -p")).replace(/`/g, "").trim();
+  // Nothing may follow the tool list: a quoted prompt there would be taken as one more tool name.
+  expect(args).toMatch(/--allowedTools(?: [A-Z][A-Za-z]*)+$/);
+  expect(cmd).toContain("git diff");
+  expect(cmd).toContain("PASS or FAIL");
+  expect(cmd!.indexOf("PASS or FAIL")).toBeLessThan(cmd!.indexOf("claude -p"));
 });
 
 test("README exists", () => {
