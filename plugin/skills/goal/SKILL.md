@@ -14,9 +14,9 @@ You never approve, never merge and never edit main yourself. Those two steps are
 Agree the goal file with the user before anything is created. Ask until each criterion is something a test or a command can decide. Draft it as JSON and show it:
 
 - a one-task goal: `{"title": "...", "acceptance": ["..."], "scope": "<dir>", "check": "<command>"}`
-- a multi-task goal: `{"title": "...", "acceptance": ["goal-level criteria"], "tasks": {"<task>": {"title": "...", "acceptance": ["..."], "scope": "<dir>", "check": "<command>"}}}`
+- a multi-task goal: `{"title": "...", "criteria": ["goal-level criteria"], "tasks": {"<task>": {"title": "...", "acceptance": ["..."], "scope": "<dir>", "check": "<command>"}}}`
 
-`scope` defaults to the repository root and `check` to the scope's tests plus the type check. Task criteria that serve a goal criterion can be written `{"text": "...", "traces": "g1"}` (the goal's criteria are g1, g2, ...); `hq trace <goal>` checks that every one is traced.
+`scope` defaults to the repository root and `check` to the scope's tests plus the type check. In a multi-task goal the goal-level list is `criteria` (what `hq trace` reads) and each task keeps `acceptance`. Task criteria that serve a goal criterion can be written `{"text": "...", "traces": "g1"}` (the goal's criteria are g1, g2, ...); `hq trace <goal>` checks that every one is traced.
 
 ## 2. Start the goal
 
@@ -36,9 +36,9 @@ Run these for each task and record each result with `hq task gate <task> <gate> 
 2. `codex_review`: `hq review <goal> --task <task>`. It runs Codex and records the gate itself, so do not record it again.
 3. `claude_diff`: a review by a session that is not the author. Do not read the diff and judge it in this session. Start a fresh one, read-only, in the worktree, and have it read the diff against the task's base:
 
-   `{ echo "Review the diff below line by line against these acceptance criteria: <criteria>. Report each real defect with file and line. Finish with exactly PASS or FAIL."; git diff <base>..goal/<goal>; } | claude -p --no-session-persistence --allowedTools Read Grep Glob`
+   `{ echo "Review the diff below line by line against these acceptance criteria: <criteria>. Report each real defect with file and line. Finish with exactly PASS or FAIL."; git diff <base>..goal/<goal>; } | env -u CLAUDECODE $(env | sed -n 's/^\(CLAUDE_CODE_[A-Za-z0-9_]*\)=.*/-u \1/p') claude -p --no-session-persistence --allowedTools Read Grep Glob`
 
-   The prompt and the diff go in together on stdin. `--allowedTools` takes any number of values, so a prompt argument after it would be read as another tool name and the reviewer would never see the criteria; keep that flag last and give no prompt argument.
+   The `env` prefix removes `CLAUDECODE` and every `CLAUDE_CODE_*` variable this session carries; with them the child refuses to start as a nested session. The prompt and the diff go in together on stdin. `--allowedTools` takes any number of values, so a prompt argument after it would be read as another tool name and the reviewer would never see the criteria; keep that flag last and give no prompt argument.
 
    Record the verdict with `hq task gate <task> claude_diff <pass|fail> --note "<one-line summary>"`.
 4. `full_tests`: once every task is done, run `hq report <goal>`. It makes the five-column report and runs the full tests on a trial merge with the latest main. Record `hq task gate <last-task> full_tests <pass|fail>` from its result.

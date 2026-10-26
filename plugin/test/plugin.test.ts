@@ -1,8 +1,10 @@
 // Checks of the plugin package: the manifests' fields, each skill's frontmatter, and that every hq subcommand the skills mention is in the usage of hq/src/cli.ts.
 
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readCriteria, trace } from "../../hq/src/trace.ts";
 
 const PLUGIN = join(import.meta.dir, "..");
 const CLI = join(PLUGIN, "../hq/src/cli.ts");
@@ -97,6 +99,50 @@ test("the Claude review command gives the prompt on stdin, not after a variadic 
   expect(cmd).toContain("git diff");
   expect(cmd).toContain("PASS or FAIL");
   expect(cmd!.indexOf("PASS or FAIL")).toBeLessThan(cmd!.indexOf("claude -p"));
+});
+
+test("the Claude review command starts claude without CLAUDECODE and CLAUDE_CODE_* variables", () => {
+  const cmd = skillText("goal").split("\n").find((l) => l.includes("claude -p") && l.includes("--allowedTools"))!;
+  // Run what follows the pipe, with a stub claude that prints its environment.
+  const tail = cmd.slice(cmd.indexOf("} | ") + 4).replace(/`$/, "").replace(/ claude -p .*$/, " claude");
+  const bin = mkdtempSync(join(tmpdir(), "hq-plugin-"));
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\nenv\n");
+  chmodSync(join(bin, "claude"), 0o755);
+  const env = { PATH: `${bin}:${process.env.PATH}`, CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_SSE_PORT: "1234", CLAUDE_KEPT: "yes" };
+  for (const shell of ["sh", "bash", "zsh"]) {
+    const r = Bun.spawnSync([shell, "-c", tail], { env });
+    if (r.exitCode === 127 && shell === "zsh") continue;
+    const names = r.stdout.toString().split("\n").map((l) => l.split("=")[0]);
+    expect(r.exitCode, `${shell}: ${r.stderr}`).toBe(0);
+    expect(names, shell).toContain("CLAUDE_KEPT");
+    expect(names.filter((n) => n === "CLAUDECODE" || n!.startsWith("CLAUDE_CODE_")), shell).toEqual([]);
+  }
+});
+
+test("the multi-task goal template is read by hq trace: goal criteria under criteria, task criteria under acceptance", () => {
+  const line = skillText("goal").split("\n").find((l) => l.includes('"tasks"') && l.includes('"criteria"'));
+  expect(line, "multi-task template").toBeTruthy();
+  const file = JSON.parse(line!.slice(line!.indexOf("{"), line!.lastIndexOf("}") + 1));
+  // A task criterion that serves the first goal criterion, as the skill describes.
+  const [name, task] = Object.entries<any>(file.tasks)[0]!;
+  task.acceptance = [{ text: task.acceptance[0], traces: "g1" }];
+
+  const repo = mkdtempSync(join(tmpdir(), "hq-plugin-"));
+  const git = (...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  };
+  git("init", "-q", "-b", "goal/demo");
+  Bun.spawnSync(["mkdir", "goals"], { cwd: repo });
+  writeFileSync(join(repo, "goals/demo.json"), JSON.stringify(file));
+  git("add", ".");
+  git("commit", "-q", "-m", "goal");
+
+  const read = readCriteria(repo, "demo");
+  expect(read.goal.map((g) => g.id)).toEqual(file.criteria.map((_: string, i: number) => `g${i + 1}`));
+  expect(read.goal.length).toBeGreaterThan(0);
+  expect(read.tasks.map((t) => t.task)).toContain(name);
+  expect(trace(repo, "demo").dangling).toEqual([]);
 });
 
 test("README exists", () => {
