@@ -10,6 +10,7 @@
 //   hq merge <goal> [--wait <seconds>]   merge an approved goal into main after the full tests pass; one merge per repository at a time, --wait queues behind a running one
 //   hq review <goal> --task <task> [--claimed-done] [--no-record]   Codex review of the task, recorded as the codex_review gate
 //   hq trace <goal> [--check-with [<cmd>]]   every task criterion traces to a goal criterion and every goal criterion is traced; --check-with asks <cmd> (default: a fresh `claude -p`) whether each trace SERVES
+//   hq work <goal> [--task <task>] [--model <id>] [--notes <file>]   run the task in a sandboxed `claude -p` session in the goal's worktree; saves the log, records start and cost; non-zero when the session ends on an error
 //   hq install [<rev>]    install hq/ from main (or <rev>) as the version that runs (M0.4)
 //   hq rollback           go back to the previously installed version
 //   hq version            the installed current and previous versions
@@ -46,6 +47,7 @@ import { render as renderReplay, replay } from "./replay";
 import { render as renderReview, review } from "./review";
 import { DEFAULT_CHECKER, render as renderTrace, trace } from "./trace";
 import { install, installed, launcherPath, rollback } from "./versions";
+import { render as renderWork, work } from "./work";
 import { type Filters, filterEvents, parseDate, render, rows, stats, toCsv } from "./stats";
 import { render as renderStatus, status } from "./status";
 
@@ -288,6 +290,13 @@ async function main(argv: string[]): Promise<number> {
       console.log(renderTrace(t));
       return t.ok ? 0 : 1;
     }
+    if (cmd === "work" && goal) {
+      const { values: o } = parseArgs({ args: argv.slice(2), options: { task: { type: "string" }, model: { type: "string" }, notes: { type: "string" } } });
+      const w = await work(cwd, goal, o);
+      console.log(renderWork(w));
+      if (!w.ok) console.error(`hq: work failed: ${w.why}`);
+      return w.ok ? 0 : 1;
+    }
     if (cmd === "install") {
       const c = install(cwd, goal);
       console.log(`installed hq ${c.slice(0, 12)} at ${launcherPath()}; previous: ${installed("previous") ?? "none"}`);
@@ -324,7 +333,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(`hq: ${(e as Error).message}`);
     return 1;
   }
-  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq env <task> [--release] | hq status [--json] | hq report|approve <goal> | hq merge <goal> [--wait <seconds>] | hq review <goal> --task <task> | hq trace <goal> [--check-with [<cmd>]] | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
+  console.error("usage: hq goal new <name> | hq replay <task> [--as <name>] | hq env <task> [--release] | hq status [--json] | hq report|approve <goal> | hq merge <goal> [--wait <seconds>] | hq review <goal> --task <task> | hq trace <goal> [--check-with [<cmd>]] | hq work <goal> [--task <task>] [--model <id>] [--notes <file>] | hq install [<rev>] | hq rollback | hq version | hq install-hook | hq task … | hq escalate … | hq escape … | hq escapes | hq stats (see src/cli.ts)");
   return 2;
 }
 
