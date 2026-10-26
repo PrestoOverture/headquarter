@@ -119,12 +119,12 @@ export async function work(cwd: string, goal: string, opts: { task?: string; mod
     ],
     { cwd: wt, env: sessionEnv(), stdin: Buffer.from(prompt), stdout: Bun.file(log), stderr: "pipe", timeout: TIMEOUT_MS },
   );
-  const [exit, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
-
   if (!started) {
     const difficulty = DIFFICULTIES.find((d) => d === spec.difficulty) ?? "medium";
     append(cwd, { type: "task.start", task, goal, title: spec.title, base, difficulty, model, arm: "m0" });
   }
+  const [exit, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+
   const result = lastResult(readFileSync(log, "utf8"));
   const out: Work = { goal, task, model, base, log, exit, turns: result?.num_turns, result: result?.result, usd: result?.total_cost_usd, ok: true };
   const problems: string[] = [];

@@ -37,7 +37,7 @@ const stream = (result: object) =>
     { type: "result", subtype: "success", is_error: false, uuid: "u-1", session_id: "s-1", total_cost_usd: 0.25, num_turns: 7, result: "Built it.", ...result },
   ].map((m) => JSON.stringify(m)).join("\n") + "\n";
 
-/** Installs a fake claude that saves its cwd, arguments (NUL-separated), stdin and environment under fake/, prints `body` and exits with `code`. */
+/** Installs a fake claude that saves its cwd, arguments (NUL-separated), stdin and environment under fake/, waits up to 5s for the ledger and saves it, prints `body` and exits with `code`. */
 function fakeClaude(body = stream({}), code = 0) {
   mkdirSync(join(root, "bin"), { recursive: true });
   mkdirSync(join(root, "fake"), { recursive: true });
@@ -48,6 +48,8 @@ pwd > "${f}/cwd"
 cat > "${f}/prompt"
 for a in "$@"; do printf '%s\\0' "$a"; done > "${f}/args"
 env > "${f}/env"
+i=0; while [ $i -lt 50 ] && ! ls "$HQ_HOME"/ledger/*/events.jsonl >/dev/null 2>&1; do i=$((i+1)); sleep 0.1; done
+cat "$HQ_HOME"/ledger/*/events.jsonl > "${f}/ledger" 2>/dev/null
 cat "${root}/body.txt"
 exit ${code}
 `;
@@ -140,6 +142,12 @@ How to work:
     expect(r.out).toContain("7 turns");
     expect(r.out).toContain("Built it.");
     expect(r.out).toContain(log);
+  });
+
+  test("the start is in the ledger while the session runs, not after it ends", () => {
+    expect(hq("work", "g", "--task", "t1").code).toBe(0);
+    const during = readFileSync(join(root, "fake/ledger"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(during).toMatchObject([{ type: "task.start", task: "t1", goal: "g", base: head }]);
   });
 
   test("the start records the head from before the session and is not repeated for a task that has one", () => {
