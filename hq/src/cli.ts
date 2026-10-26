@@ -38,7 +38,7 @@ import { git, revParse } from "./git";
 import { newGoal } from "./goal";
 import { guard, installHook } from "./guard";
 import { recordCostFrom } from "./cost";
-import { append, ARMS, CAUSES, DIFFICULTIES, GATES, readEvents } from "./ledger";
+import { append, ARMS, CAUSES, DIFFICULTIES, GATES, mergedAs, readEvents } from "./ledger";
 import { recordLines } from "./lines";
 import { merge } from "./merge";
 import { readReportMarkdown, readReportMeta, report } from "./report";
@@ -86,6 +86,8 @@ export function approve(cwd: string, goal: string, out: Writer = writeStderr): s
   if (!validGoal(goal)) throw new Error(`bad goal name ${goal}: lowercase letters, digits and dashes`);
   const head = revParse(goalBranch(goal), cwd);
   if (!head) throw new Error(`no branch ${goalBranch(goal)}`);
+  const merged = mergedAs(cwd, goal, head);
+  if (merged) throw new Error(`${goalBranch(goal)} at ${head.slice(0, 12)} is already merged as ${merged}; only a new commit can be approved`);
   // D31: you read the report before you approve; the report must describe this commit.
   const r = readReportMeta(cwd, goal, head);
   if (!r) throw new Error(`no report for ${goalBranch(goal)} at ${head.slice(0, 12)}: run \`hq report ${goal}\` and read it first`);

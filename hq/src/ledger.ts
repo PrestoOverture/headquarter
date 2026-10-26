@@ -48,6 +48,12 @@ export function append(cwd: string, e: NewEvent, at = new Date()): Event {
   return event;
 }
 
+/** The merge commit this goal commit was merged as, if the ledger has a merge event for it. */
+export function mergedAs(cwd: string, goal: string, commit: string): string | null {
+  for (const e of readEvents(cwd)) if (e.type === "merge" && e.goal === goal && e.commit === commit) return e.merge_commit;
+  return null;
+}
+
 export function readEvents(cwd: string): Event[] {
   const p = ledgerPath(cwd);
   if (!existsSync(p)) return [];
