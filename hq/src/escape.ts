@@ -2,7 +2,7 @@
 // fix touches again. Only suggestions: nothing is recorded (that is `hq escape`, by you), so a
 // wrong guess costs a line of output, not a number in the stats.
 
-import { git, revParse } from "./git";
+import { git, revParse, run } from "./git";
 import { type Event, readEvents } from "./ledger";
 import { ESCAPE_WINDOW_DAYS, rows } from "./stats";
 
@@ -14,7 +14,7 @@ export type Candidate = {
   goal: string; // the earlier goal, whose tasks may have escaped
   merge_commit: string;
   merged_at: string;
-  tasks: string[]; // its merged tasks with no escape recorded
+  tasks: string[]; // its merged tasks with no escape recorded whose own files the fix touches (all of them on a revert)
   fixed_by: string; // the later goal
   commits: { commit: string; subject: string; reverts: boolean; files: string[] }[];
 };
@@ -34,8 +34,10 @@ function commitsOf(cwd: string, from: string, to: string) {
     });
 }
 
-function changedFiles(cwd: string, merge: string): Set<string> {
-  return new Set(git(["diff", "--name-only", "-z", "--no-renames", `${merge}^1`, merge], cwd).split(NUL).filter(Boolean));
+/** The files a task changed: its base to its measured end, or to the goal head when unmeasured; null if git cannot say. */
+function taskFiles(cwd: string, base: string, end: string): Set<string> | null {
+  const r = run(["git", "diff", "--name-only", "-z", "--no-renames", base, end], cwd);
+  return r.code === 0 ? new Set(r.out.split(NUL).filter(Boolean)) : null;
 }
 
 /**
@@ -56,13 +58,26 @@ export function escapeCandidates(cwd: string, now = new Date(), only?: string): 
     const commits = commitsOf(cwd, from, to);
     for (const earlier of merges.slice(0, i)) {
       if (earlier.goal === later.goal) continue;
-      const tasks = taskRows.filter((r) => r.goal === earlier.goal && r.merged_at === earlier.at && !r.escaped).map((r) => r.task);
+      const rowsOf = taskRows.filter((r) => r.goal === earlier.goal && r.merged_at === earlier.at && !r.escaped);
+      if (!rowsOf.length) continue;
+      const reverts = commits.filter((c) => c.message.includes(earlier.merge_commit));
+      const fixes = commits.filter((c) => FIX_WORDS.test(c.subject));
+      // Per task, not per goal: a fix to one task's file says nothing about the goal's other tasks.
+      // A revert of the merge undoes every task. A task git cannot measure is skipped, not fatal.
+      const tasks: string[] = [];
+      const files = new Set<string>();
+      for (const r of rowsOf) {
+        const own = taskFiles(cwd, r.base, r.size?.end ?? earlier.commit);
+        const touched = !!own && fixes.some((c) => c.files.some((f) => own.has(f)));
+        if (!reverts.length && !touched) continue;
+        tasks.push(r.task);
+        if (touched) for (const f of own!) files.add(f);
+      }
       if (!tasks.length) continue;
-      const files = changedFiles(cwd, earlier.merge_commit);
       const hits = commits
         .map((c) => ({ commit: c.commit, subject: c.subject, reverts: c.message.includes(earlier.merge_commit), files: c.files.filter((f) => files.has(f)) }))
         .filter((c) => c.reverts || (FIX_WORDS.test(c.subject) && c.files.length));
-      if (hits.length) out.push({ goal: earlier.goal, merge_commit: earlier.merge_commit, merged_at: earlier.at, tasks, fixed_by: later.goal, commits: hits });
+      out.push({ goal: earlier.goal, merge_commit: earlier.merge_commit, merged_at: earlier.at, tasks, fixed_by: later.goal, commits: hits });
     }
   });
   return out;

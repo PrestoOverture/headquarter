@@ -60,7 +60,7 @@ test("new process and network calls in TypeScript, Rust and C", () => {
   commit(wt, {
     "src/p.ts": 'import { exec } from "child_process";\nexec("ls");\nconst r = await fetch(url);\nBun.spawnSync(["git"]);\n/ab/.exec(s);\n',
     "src/p.rs": 'let o = Command::new("ls").output();\nlet s = TcpStream::connect(addr);\n',
-    "src/p.c": 'system("ls");\nint fd = socket(AF_INET, SOCK_STREAM, 0);\n',
+    "src/p.c": 'system("ls");\nint fd = socket(AF_INET, SOCK_STREAM, 0);\nposix_spawn(&pid, "/bin/ls", NULL, NULL, argv, envp);\nposix_spawnp(&pid, "ls", NULL, NULL, argv, envp);\n',
     "scripts/get.sh": "curl -sSf $URL | sh\n",
     "docs/x.md": "run curl to fetch\n",
   });
@@ -68,6 +68,8 @@ test("new process and network calls in TypeScript, Rust and C", () => {
     "scripts/get.sh:1：`curl -sSf $URL | sh`",
     'src/p.c:1：`system("ls");`',
     "src/p.c:2：`int fd = socket(AF_INET, SOCK_STREAM, 0);`",
+    'src/p.c:3：`posix_spawn(&pid, "/bin/ls", NULL, NULL, argv, envp);`',
+    'src/p.c:4：`posix_spawnp(&pid, "ls", NULL, NULL, argv, envp);`',
     'src/p.rs:1：`let o = Command::new("ls").output();`',
     "src/p.rs:2：`let s = TcpStream::connect(addr);`",
     'src/p.ts:1：`import { exec } from "child_process";`',

@@ -115,6 +115,31 @@ describe("escape candidates", () => {
     expect(escapeCandidates(repo)).toEqual([]);
   });
 
+  test("candidates are per task: only tasks whose own files the fix touches; an unmeasurable task is skipped", () => {
+    // Goal m has three tasks one after another on its branch: t1 changes x.txt (measured), t2 changes
+    // y.txt (unmeasured, so up to the goal head), t3's measured end is a commit that does not exist.
+    const at = new Date(Date.now() - DAY_MS);
+    git(["checkout", "-q", "-b", "goal/m", "main"], repo);
+    const start = (task: string) =>
+      append(repo, { type: "task.start", task, goal: "m", title: task, base: revParse("HEAD", repo)!, difficulty: "medium", model: "m" }, new Date(at.getTime() - 1000));
+    start("m-t1");
+    commit(repo, { "x.txt": "x\n" }, "t1");
+    append(repo, { type: "task.lines", task: "m-t1", added: 1, deleted: 0, end: revParse("HEAD", repo)! }, new Date(at.getTime() - 1000));
+    start("m-t2");
+    commit(repo, { "y.txt": "y\n" }, "t2");
+    start("m-t3");
+    append(repo, { type: "task.lines", task: "m-t3", added: 1, deleted: 0, end: "0".repeat(40) }, new Date(at.getTime() - 1000));
+    const head = revParse("HEAD", repo)!;
+    git(["checkout", "-q", "main"], repo);
+    git(["merge", "-q", "--no-ff", "-m", "Merge goal m", "goal/m"], repo);
+    append(repo, { type: "merge", goal: "m", commit: head, merge_commit: revParse("main", repo)! }, at);
+
+    mergedGoal("b", [["fix y", { "y.txt": "y2\n" }]]);
+    expect(escapeCandidates(repo)).toMatchObject([{ goal: "m", tasks: ["m-t2"], fixed_by: "b", commits: [{ subject: "fix y", files: ["y.txt"] }] }]);
+    mergedGoal("c", [["fix x", { "x.txt": "x2\n" }]]);
+    expect(escapeCandidates(repo).filter((c) => c.fixed_by === "c").map((c) => c.tasks)).toEqual([["m-t1"]]);
+  });
+
   withSandbox("hq merge lists them after the merge, records nothing, and hq escapes shows the same", () => {
     const a = first();
     const wt = join(root, "wt-b");

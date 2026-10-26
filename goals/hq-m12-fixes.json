@@ -1,6 +1,11 @@
 {
-  "title": "hq-m12-fixes",
-  "acceptance": [],
+  "title": "Fix the three M0 defects the M1.2 cross-check found (t09, t11, t20)",
+  "acceptance": [
+    "Escape candidates are attributed per task: a task is listed only when a later fix touches one of its own changed files (its base to its measured end, or to the goal head when unmeasured); a revert of the merge still lists every task; a task git cannot measure is skipped without failing the others",
+    "The report's new process call list includes C's posix_spawn and posix_spawnp alongside the existing exec/system patterns",
+    "hq trace treats a goal file's top-level acceptance list as the criteria of its single task (named after the goal) when the file has no tasks; the multi-task form is unchanged",
+    "Each behaviour has a test in hq/test that fails on main and passes on this branch; cd hq && bun test --timeout 30000 && bunx tsc --noEmit pass"
+  ],
   "shelved": [],
   "known_issues": []
 }
