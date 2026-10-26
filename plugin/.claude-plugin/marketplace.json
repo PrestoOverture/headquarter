@@ -1,0 +1,13 @@
+{
+  "name": "headquarter",
+  "owner": { "name": "headquarter" },
+  "description": "The hq goal flow as a Claude Code plugin.",
+  "plugins": [
+    {
+      "name": "hq",
+      "source": "./",
+      "author": { "name": "headquarter" },
+      "description": "Drive the hq goal flow from Claude Code: set a repository up, write a goal, work it in a sandboxed session, run the gates, and hand approval back to you."
+    }
+  ]
+}

@@ -31,6 +31,7 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/settings.ts     执行者会话的 Claude Code 设置（`--settings`）：沙箱严格开启，main 的 ref、packed-refs、git hooks 和 config 禁写，凭据文件对 shell 和 Read 工具都不可读，除本机端口外无网络
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令
   test/               假执行者的端到端测试：真 git、真 worktree、真沙箱
+plugin/               hq 的 Claude Code 插件（也是本地 marketplace `headquarter`）：`setup` 技能（装钩子、写 .hq.json）和 `goal` 技能（验收标准、hq work、关卡、交给你批准）；批准和合入始终是你在终端里做
 eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、判卷、汇总）
   src/merge-runs.ts   把几次运行的结果合成一份，每道题取最新的判卷（`bun src/merge-runs.ts <out> <run>...`）
   src/ab.ts           两份合并结果逐题对比：修好、弄坏、不变，两边都判了的题上的抓住率（`bun src/ab.ts <a> <b> [--ids <file>]`）
