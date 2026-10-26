@@ -5,7 +5,9 @@
     "hq refuses to approve or merge a goal commit that is already merged, and records nothing when it refuses"
   ],
   "shelved": [],
-  "known_issues": [],
+  "known_issues": [
+    "f3-plugin: the goal skill's Claude review command restricts tools only with --allowedTools, which grants rather than limits; a user's settings that allow Edit or Bash reach the reviewer, so it is not strictly read-only (Codex P2, round 3). F2's `hq gates` replaces this command with a session that has --setting-sources '' and Bash, Edit and Write disallowed."
+  ],
   "tasks": {
     "f1-remerge": {
       "title": "hq refuses a second approval or merge of an already merged goal commit",
