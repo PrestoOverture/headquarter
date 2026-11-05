@@ -10,8 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { addCi } from "./ci";
-import { readClaude } from "./claude";
-import { readCodex } from "./codex";
+import { plugins } from "./plugins";
 import { Repos } from "./git";
 import { buildTasks } from "./link";
 import { html, terminalTable } from "./report";
@@ -22,20 +21,25 @@ const { values } = parseArgs({
     out: { type: "string", default: "out/report.html" },
     since: { type: "string" },
     ci: { type: "boolean", default: false },
-    "claude-dir": { type: "string", default: join(homedir(), ".claude/projects") },
-    "codex-dir": { type: "string", default: join(homedir(), ".codex/sessions") },
+    ...Object.fromEntries(plugins.map(plugin => [`${plugin.name}-dir`, { type: "string" as const }])),
     "include-headless": { type: "boolean", default: false },
   },
 });
 
 const log = (s: string) => console.error(s);
 const t0 = Date.now();
-const claude = readClaude(values["claude-dir"]!);
-const codex = readCodex(values["codex-dir"]!);
-log(`read ${claude.length} Claude and ${codex.length} Codex sessions in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+const counts: Record<string, number> = {};
+const sessions = plugins.flatMap(plugin => {
+  const override = (values as Record<string, unknown>)[`${plugin.name}-dir`];
+  const paths = typeof override === "string" ? [override] : plugin.defaultPaths(homedir());
+  const read = paths.flatMap(path => plugin.read(path));
+  counts[plugin.name] = read.length;
+  return read;
+});
+log(`read ${Object.entries(counts).map(([name, count]) => `${count} ${name}`).join(" and ")} sessions in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
 const repos = new Repos(homedir());
-let tasks = buildTasks([...claude, ...codex], repos);
+let tasks = buildTasks(sessions, repos);
 if (values.since) {
   const since = Date.parse(values.since);
   tasks = tasks.filter((t) => t.start >= since);
@@ -46,7 +50,7 @@ if (values.ci) await addCi(tasks, repos, join(homedir(), ".cache/agent-tracker/c
 
 const out = resolve(values.out!);
 mkdirSync(dirname(out), { recursive: true });
-writeFileSync(out, html(tasks, { generatedAt: Date.now(), sessions: { claude: claude.length, codex: codex.length }, repos: repos.all().length, ci: values.ci! }));
+writeFileSync(out, html(tasks, { generatedAt: Date.now(), sessions: counts, repos: repos.all().length, ci: values.ci! }));
 writeFileSync(out.replace(/\.html$/, "") + ".tasks.json", JSON.stringify(tasks, null, 1));
 
 const shown = tasks.filter((t) => t.repo && t.commits.length && (values["include-headless"] || !t.headless));

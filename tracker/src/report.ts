@@ -7,7 +7,7 @@ import type { Task } from "./link";
 
 const AGGREGATE_SRC = readFileSync(new URL("./aggregate.js", import.meta.url), "utf8").replace(/^export /m, "");
 
-export type Meta = { generatedAt: number; sessions: { claude: number; codex: number }; repos: number; ci: boolean };
+export type Meta = { generatedAt: number; sessions: Record<string, number>; repos: number; ci: boolean };
 
 /** What the page needs of a task (no file paths beyond the working directory, no prompt text). */
 function slim(t: Task) {
@@ -125,7 +125,7 @@ const day = (ms) => new Date(ms).toISOString().slice(0, 10);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 const m = DATA.meta;
-$("meta").textContent = "生成于 " + new Date(m.generatedAt).toLocaleString() + " · Claude 会话 " + m.sessions.claude + " · Codex 会话 " + m.sessions.codex + " · 仓库 " + m.repos + (m.ci ? " · 含 CI" : " · 未查 CI（--ci）");
+$("meta").textContent = "生成于 " + new Date(m.generatedAt).toLocaleString() + " · " + Object.entries(m.sessions).map(([name, count]) => name + " 会话 " + count).join(" · ") + " · 仓库 " + m.repos + (m.ci ? " · 含 CI" : " · 未查 CI（--ci）");
 const repos = [...new Set(DATA.tasks.map((t) => t.repo).filter(Boolean))].sort();
 $("repo").innerHTML = '<option value="">全部</option>' + repos.map((r) => '<option>' + esc(r) + '</option>').join("");
 

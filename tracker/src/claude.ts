@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { COMMITS, commitShasIn, emptySession, finish, type Session, touch, WAIT_CAP_MS } from "./types";
+import type { SourcePlugin } from "./plugins";
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-py", "sdk-ts"]);
 const NOT_A_PROMPT = /^(<task-notification>|<local-command-|<system-reminder>|This session is being continued|Caveat: )/;
@@ -46,6 +47,7 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
   const codexTools = new Map<string, string>(); // tool_use id -> name
   const commitTools = new Set<string>(); // tool_use ids whose command makes commits
   const costByProcess = new Map<number, number>(); // cost-state startTime -> highest total seen
+  const usageMessages = new Set<string>();
   let lastAssistant: number | null = null;
   let seen = false;
 
@@ -82,6 +84,18 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
     if (d.type === "assistant") {
       const usage = d.message?.usage;
       if (usage) event.usage = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+      const messageId = d.message?.id;
+      if (usage && (typeof messageId !== "string" || !usageMessages.has(messageId))) {
+        if (typeof messageId === "string") usageMessages.add(messageId);
+        event.tokens = {
+          input: usage.input_tokens ?? 0,
+          cacheRead: usage.cache_read_input_tokens ?? 0,
+          cacheWrite: usage.cache_creation_input_tokens ?? 0,
+          output: usage.output_tokens ?? 0,
+          reasoning: 0,
+        };
+        for (const key of Object.keys(s.tokens) as (keyof Session["tokens"])[]) s.tokens[key] += event.tokens[key];
+      }
       const model = d.message?.model;
       if (typeof model === "string" && model !== "<synthetic>") s.models[model] = (s.models[model] ?? 0) + 1;
       if (Array.isArray(content)) {
@@ -155,3 +169,10 @@ export function readClaude(root: string): Session[] {
   }
   return out;
 }
+
+export const claudePlugin: SourcePlugin = {
+  name: "claude",
+  defaultPaths: (home) => [join(home, ".claude/projects")],
+  detect: (path) => readClaude(path).length > 0,
+  read: readClaude,
+};

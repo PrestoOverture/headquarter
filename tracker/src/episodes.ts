@@ -16,7 +16,12 @@ export function splitEpisodes(s: Session, commits: { at: number; sessionStart?: 
     return { ...s, id: `${s.id}/episode-${i+1}`, start, end: i === starts.length-1 ? s.end : (times.at(-1) ?? start), times,
       events, humanPrompts: sum('humanPrompts'), interrupts: sum('interrupts'), waitMs: sum('waitMs'),
       costUSD: (s.costUSD ?? 0) * (totalUsage ? sum('usage')/totalUsage : 1/starts.length),
-      tokens: s.tokens ? {input: sum('input'), cached: sum('cached'), output: sum('output')} : undefined,
+      // Preserve the historical per-episode clamp and Codex-only report metric.
+      codexTokens: s.codexTokens === undefined ? undefined : Math.max(0, sum('input') - sum('cached')) + sum('output'),
+      tokens: Object.fromEntries(Object.keys(s.tokens).map(key => {
+        const k = key as keyof Session['tokens'];
+        return [k, events.reduce((n, e) => n + (e.tokens?.[k] ?? 0), 0)];
+      })) as Session['tokens'],
     };
   });
 }

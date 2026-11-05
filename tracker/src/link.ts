@@ -183,7 +183,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
       kinds: [...kinds].sort(),
       sessions: tree.length,
       costUSD: tree.reduce((n, s) => n + (s.costUSD ?? 0), 0),
-      codexTokens: tree.reduce((n, s) => n + (s.tokens ? Math.max(0, s.tokens.input - s.tokens.cached) + s.tokens.output : 0), 0),
+      codexTokens: tree.reduce((n, s) => n + (s.codexTokens ?? 0), 0),
       humanPrompts: tree.reduce((n, s) => n + s.humanPrompts, 0),
       interrupts: tree.reduce((n, s) => n + s.interrupts, 0),
       waitMs: tree.reduce((n, s) => n + s.waitMs, 0),
@@ -244,7 +244,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
       const episode: Task = { ...task, id: slice.id, start: slice.start, end: Math.max(slice.end, ...children.map(s => s.end)),
         combo: comboLabel(root, kinds), kinds: [...kinds].sort(), sessions: group.length, models: Object.keys(models),
         costUSD: group.reduce((n,s) => n+(s.costUSD ?? 0),0),
-        codexTokens: group.reduce((n,s) => n+(s.tokens ? Math.max(0,s.tokens.input-s.tokens.cached)+s.tokens.output : 0),0),
+        codexTokens: group.reduce((n,s) => n+(s.codexTokens ?? 0),0),
         humanPrompts: group.reduce((n,s) => n+s.humanPrompts,0),
         interrupts: group.reduce((n,s) => n+s.interrupts,0), waitMs: group.reduce((n,s) => n+s.waitMs,0), commits,
       };

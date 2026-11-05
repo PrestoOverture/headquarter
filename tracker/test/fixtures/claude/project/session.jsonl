@@ -1,0 +1,4 @@
+{"type": "assistant", "timestamp": "2026-01-01T00:00:00Z", "sessionId": "claude-fixture", "cwd": "/fixture", "message": {"id": "m1", "content": [], "usage": {"input_tokens": 10, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 30, "output_tokens": 4}}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:01Z", "sessionId": "claude-fixture", "cwd": "/fixture", "message": {"id": "m1", "content": [], "usage": {"input_tokens": 10, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 30, "output_tokens": 4}}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:02Z", "sessionId": "claude-fixture", "cwd": "/fixture", "message": {"id": "m2", "content": [], "usage": {"input_tokens": 5, "output_tokens": 6}}}
+{"type": "assistant", "timestamp": "2026-01-01T00:00:03Z", "sessionId": "claude-fixture", "cwd": "/fixture", "message": {"id": "m3", "content": []}}

@@ -1,14 +1,14 @@
 // The tracker's model. A session is one agent's record (one file); a task is one work episode plus
 // the child sessions started during it, across vendors. Times are epoch milliseconds.
 
-export type Vendor = "claude" | "codex";
+export type Tokens = { input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number };
 
 /** How a session came to be: started by a person or a program (root), or spawned by another session. */
 export type Role = "root" | "subagent" | "review" | "delegated";
 
 export type Session = {
-  events: { at: number; humanPrompts?: number; interrupts?: number; waitMs?: number; usage?: number; input?: number; cached?: number; output?: number }[];
-  vendor: Vendor;
+  events: { at: number; humanPrompts?: number; interrupts?: number; waitMs?: number; usage?: number; input?: number; cached?: number; output?: number; tokens?: Tokens }[];
+  vendor: string;
   id: string;
   file: string;
   cwd: string;
@@ -23,7 +23,9 @@ export type Session = {
   parent?: string; // the spawning session's id, when the record says so
   agentRole?: string;
   costUSD?: number; // Claude: the process's own total (subagents included)
-  tokens?: { input: number; cached: number; output: number }; // Codex: cumulative, no prices in the record
+  tokens: Tokens;
+  /** Legacy report metric, supplied by the Codex reader only (uncached input + output). */
+  codexTokens?: number;
   humanPrompts: number;
   interrupts: number;
   /** Time the agent sat finished before the person's next prompt, each gap capped at WAIT_CAP_MS. */
@@ -58,8 +60,9 @@ export function commitShasIn(text: string): string[] {
   return out;
 }
 
-export function emptySession(vendor: Vendor, id: string, file: string): Session {
+export function emptySession(vendor: string, id: string, file: string): Session {
   return {
+    tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
     events: [], vendor, id, file, cwd: "", start: Infinity, end: -Infinity, times: [], models: {},
     headless: false, role: "root", humanPrompts: 0, interrupts: 0, waitMs: 0, commitShas: [], codexThreads: [],
   };

@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { COMMITS, commitShasIn, emptySession, finish, type Session, touch, WAIT_CAP_MS } from "./types";
+import type { SourcePlugin } from "./plugins";
 
 const HEADLESS_ORIGINATORS = new Set(["codex_exec", "claude2codex", "c2c-mcp"]);
 const DELEGATED_ORIGINATORS = new Set(["claude2codex", "c2c-mcp"]);
@@ -28,6 +29,7 @@ function looksTyped(text: string): boolean {
 
 export function parseCodex(text: string, file: string): Session | null {
   const s = emptySession("codex", "", file);
+  let previousUsage = { input: 0, cached: 0, output: 0 };
   let lastAssistant: number | null = null;
   let attributed = false; // a task_started with turn_attribution was seen
   const oldPrompts: Session['events'] = [];
@@ -70,11 +72,24 @@ export function parseCodex(text: string, file: string): Session | null {
     if (d.type === "event_msg") {
       if (p.type === "token_count" && p.info?.total_token_usage) {
         const u = p.info.total_token_usage;
-        const prev = s.tokens ?? {input: 0, cached: 0, output: 0};
+        const prev = previousUsage;
         event.input = Math.max(0, (u.input_tokens ?? 0) - prev.input);
         event.cached = Math.max(0, (u.cached_input_tokens ?? 0) - prev.cached);
         event.output = Math.max(0, (u.output_tokens ?? 0) - prev.output);
-        s.tokens = { input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0 };
+        const tokens = {
+          input: (u.input_tokens ?? 0) - (u.cached_input_tokens ?? 0),
+          cacheRead: u.cached_input_tokens ?? 0,
+          cacheWrite: 0,
+          output: u.output_tokens ?? 0,
+          reasoning: u.reasoning_output_tokens ?? 0,
+        };
+        event.tokens = Object.fromEntries(Object.keys(tokens).map(key => {
+          const k = key as keyof typeof tokens;
+          return [k, Math.max(0, tokens[k] - s.tokens[k])];
+        })) as Session["tokens"];
+        s.tokens = tokens;
+        s.codexTokens = Math.max(0, tokens.input) + tokens.output;
+        previousUsage = { input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0 };
       } else if (p.type === "task_started" && p.turn_attribution) {
         attributed = true;
         if (HUMAN_TRIGGERS.has(p.turn_attribution.turn_trigger) && !s.headless) {
@@ -146,3 +161,10 @@ export function readCodex(root: string): Session[] {
   }
   return out;
 }
+
+export const codexPlugin: SourcePlugin = {
+  name: "codex",
+  defaultPaths: (home) => [join(home, ".codex/sessions")],
+  detect: (path) => readCodex(path).length > 0,
+  read: readCodex,
+};
