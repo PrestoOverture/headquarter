@@ -1,0 +1,6 @@
+{
+  "name": "hq",
+  "version": "0.1.0",
+  "author": { "name": "headquarter" },
+  "description": "Drive the hq goal flow from Claude Code: set a repository up, write a goal, work it in a sandboxed session, run the gates, and hand approval back to you."
+}

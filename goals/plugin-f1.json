@@ -1,0 +1,51 @@
+{
+  "title": "F1: hq as a Claude Code plugin (hq work, plugin package, re-merge fix)",
+  "acceptance": [
+    "hq can be installed into a repository as a Claude Code plugin and drives the M0 flow: goal, work in a separate sandboxed session, gates, report, your approval in a terminal, merge",
+    "hq refuses to approve or merge a goal commit that is already merged, and records nothing when it refuses"
+  ],
+  "shelved": [],
+  "known_issues": [
+    "f3-plugin: the goal skill's Claude review command restricts tools only with --allowedTools, which grants rather than limits; a user's settings that allow Edit or Bash reach the reviewer, so it is not strictly read-only (Codex P2, round 3). F2's `hq gates` replaces this command with a session that has --setting-sources '' and Bash, Edit and Write disallowed."
+  ],
+  "tasks": {
+    "f1-remerge": {
+      "title": "hq refuses a second approval or merge of an already merged goal commit",
+      "difficulty": "easy",
+      "scope": "hq",
+      "check": "cd hq && bun test --timeout 30000 && bunx tsc --noEmit",
+      "acceptance": [
+        "`hq approve <goal>` refuses, with a non-zero exit and a message naming the merge commit, when the goal's head commit already has a merge event in the ledger (it was merged before); it appends no event and writes no approval",
+        "`hq merge <goal>` on a goal whose head commit was already merged exits non-zero with `already merged as <merge commit sha>`, moves no ref and appends no event; this check runs before the approval check",
+        "A goal that got a new commit after its merge can be approved and merged again as usual",
+        "End-to-end tests with a real repository and a temporary HQ_HOME cover approve after merge, merge after merge, and a new commit after a merge"
+      ]
+    },
+    "f2-work": {
+      "title": "hq work: run a goal's task in a separate sandboxed claude -p session",
+      "difficulty": "hard",
+      "scope": "hq",
+      "check": "cd hq && bun test --timeout 30000 && bunx tsc --noEmit",
+      "acceptance": [
+        "`hq work <goal> [--task <task>] [--model <id>] [--notes <file>]` runs one `claude -p` session (stream-json output, effort high, model default claude-sonnet-5-5) in the goal's worktree (<repo>.goals/<goal>) with the prompt built from goals/<goal>.json: the task under tasks.<task> or the top level, its title, numbered acceptance criteria, scope (default the repository root) and check command, plus the notes file's text when given; it replaces scripts/m0/answer.ts",
+        "The session runs under the executor sandbox settings passed with --settings (moved into hq/src from scripts/sandbox/check.ts and scripts/m0/settings.ts so the installed hq has them): sandbox enabled with failIfUnavailable and no unsandboxed commands, writes denied to main's ref, packed-refs, git hooks and config, credential files unreadable for the shell and the Read tool, no network but local binding; with --setting-sources '' and --strict-mcp-config, WebFetch and WebSearch disallowed, and none of the caller's CLAUDE_CODE_* variables",
+        "It saves the full stream-json log under $HQ_HOME/work/<repo>/<goal>-<task>-<timestamp>.jsonl, records a task.start (base = the goal head before the session, model, goal) if the task has none, records the session's cost like `hq task cost --from`, and prints the session's cost, turns, and final message; a session that ends on an error or a usage limit exits non-zero after recording its cost",
+        "It refuses, starting nothing, when the goal branch or worktree does not exist or the task is not in the goal file",
+        "Tests use a fake `claude` executable on PATH (no network): the prompt and arguments it receives, the settings, the log and ledger events, notes, an error result, and each refusal"
+      ]
+    },
+    "f3-plugin": {
+      "title": "The hq Claude Code plugin: marketplace, setup and goal skills",
+      "difficulty": "medium",
+      "scope": "plugin",
+      "check": "claude plugin validate plugin && cd plugin && bun test --timeout 30000",
+      "acceptance": [
+        "plugin/ is a local marketplace and plugin in one: plugin/.claude-plugin/marketplace.json lists plugin `hq` with source ./ and plugin/.claude-plugin/plugin.json names it, so `claude plugin marketplace add <repo>/plugin` then `claude plugin install hq@headquarter` installs it; `claude plugin validate plugin` passes",
+        "A `setup` skill prepares a repository: checks `~/.hq/bin/hq` exists (if not, says to run `bun hq/src/cli.ts install` in the headquarter repository), runs `hq install-hook`, and writes `.hq.json` with the test command it agrees with you, without overwriting an existing one",
+        "A `goal` skill walks through the flow: write goals/<goal>.json acceptance criteria with you (multi-task goals under tasks), `hq goal new`, `hq work` per task, the gates (`hq report` for the full tests, `hq review` for Codex, and a Claude review of the diff by a session that is not the author), recording each gate with `hq task gate`, then asking you to run `hq approve <goal>` and `hq merge <goal>` yourself in a terminal; it never approves, merges or edits main itself",
+        "plugin/README.md says how to install it, what each skill does and what stays manual (approval)",
+        "Tests in plugin/test check the manifests' fields, each skill's frontmatter (name, description), and that every `hq` subcommand the skills mention exists in the usage of hq/src/cli.ts"
+      ]
+    }
+  }
+}

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { consumeApproval, goalBranch, hqHome, MAIN, readApproval, repoId } from "./approval";
 import { type Candidate, escapeCandidates } from "./escape";
 import { commonDir, git, revParse, run, worktreeOf } from "./git";
-import { append, readEvents } from "./ledger";
+import { append, mergedAs, readEvents } from "./ledger";
 import { recordLines } from "./lines";
 import { holder, tryLock } from "./lockfile";
 import { sandboxed } from "./sandbox";
@@ -81,11 +81,13 @@ function acquire(cwd: string, wait: number): (() => void) | null {
   }
 }
 
-/** The goal branch's head, if it is the commit that was approved. */
+/** The goal branch's head, if it is the commit that was approved and has not been merged before. */
 function approvedHead(cwd: string, goal: string): { ok: true; head: string } | { ok: false; reason: string } {
+  const head = revParse(goalBranch(goal), cwd);
+  const merged = head && mergedAs(cwd, goal, head);
+  if (merged) return { ok: false, reason: `already merged as ${merged}` };
   const approval = readApproval(cwd, goal);
   if (!approval) return { ok: false, reason: `goal ${goal} is not approved: run \`hq approve ${goal}\`` };
-  const head = revParse(goalBranch(goal), cwd);
   if (!head) return { ok: false, reason: `no branch ${goalBranch(goal)}` };
   if (head !== approval.commit)
     return {

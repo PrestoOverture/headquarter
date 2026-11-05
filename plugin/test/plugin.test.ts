@@ -1,0 +1,150 @@
+// Checks of the plugin package: the manifests' fields, each skill's frontmatter, and that every hq subcommand the skills mention is in the usage of hq/src/cli.ts.
+
+import { expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readCriteria, trace } from "../../hq/src/trace.ts";
+
+const PLUGIN = join(import.meta.dir, "..");
+const CLI = join(PLUGIN, "../hq/src/cli.ts");
+const json = (path: string) => JSON.parse(readFileSync(join(PLUGIN, path), "utf8"));
+const skills = readdirSync(join(PLUGIN, "skills"));
+
+/** The `---` block at the top of a SKILL.md, parsed as YAML. */
+function frontmatter(text: string): Record<string, unknown> {
+  const m = text.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!m) throw new Error("no frontmatter");
+  return Bun.YAML.parse(m[1]!) as Record<string, unknown>;
+}
+
+const skillText = (skill: string) => readFileSync(join(PLUGIN, "skills", skill, "SKILL.md"), "utf8");
+
+test("plugin.json names the plugin hq", () => {
+  const p = json(".claude-plugin/plugin.json");
+  expect(p.name).toBe("hq");
+  expect(p.version).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(p.description).toBeTruthy();
+});
+
+test("marketplace.json lists plugin hq with source ./ and the marketplace name headquarter", () => {
+  const m = json(".claude-plugin/marketplace.json");
+  expect(m.name).toBe("headquarter");
+  expect(m.owner.name).toBeTruthy();
+  expect(m.plugins).toHaveLength(1);
+  expect(m.plugins[0].name).toBe(json(".claude-plugin/plugin.json").name);
+  expect(m.plugins[0].source).toBe("./");
+});
+
+test("the setup and goal skills exist", () => {
+  expect(skills.sort()).toEqual(["goal", "setup"]);
+});
+
+for (const skill of ["setup", "goal"]) {
+  test(`skill ${skill} has frontmatter with its name and a description`, () => {
+    const f = frontmatter(skillText(skill));
+    expect(f.name).toBe(skill);
+    expect(typeof f.description).toBe("string");
+    expect((f.description as string).length).toBeGreaterThan(40);
+  });
+}
+
+/** The usage lines of cli.ts: the header comment and the usage string of the fallback error. */
+function usage(): string {
+  const src = readFileSync(CLI, "utf8");
+  const header = src.split("\n").filter((l) => l.startsWith("//")).join("\n");
+  const last = src.match(/console\.error\("(usage: hq [^"]*)"\)/);
+  if (!last) throw new Error("no usage string in cli.ts");
+  return `${header}\n${last[1]}`;
+}
+
+/** Every `hq <cmd>` (with the second word for task and goal) inside backticks of a skill. */
+function mentioned(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const span of text.matchAll(/`([^`\n]+)`|^```\n([\s\S]*?)^```/gm)) {
+    for (const m of (span[1] ?? span[2]!).matchAll(/(?:^|[\s|(])(?:~\/\.hq\/bin\/)?hq ([a-z][\w-]*)(?: ([a-z][\w-]*))?/gm)) {
+      out.add(m[1] === "task" || m[1] === "goal" ? `${m[1]} ${m[2]}` : m[1]!);
+    }
+  }
+  return out;
+}
+
+for (const skill of ["setup", "goal"]) {
+  test(`every hq subcommand skill ${skill} mentions is in the usage of cli.ts`, () => {
+    const found = mentioned(skillText(skill));
+    expect(found.size).toBeGreaterThan(0);
+    const text = usage();
+    for (const sub of found) expect(text, `hq ${sub}`).toContain(`hq ${sub}`);
+  });
+}
+
+test("together the skills mention the whole flow", () => {
+  const all = new Set(skills.flatMap((s) => [...mentioned(skillText(s))]));
+  for (const sub of ["install-hook", "goal new", "work", "review", "report", "task gate", "approve", "merge"]) expect(all.has(sub), sub).toBe(true);
+});
+
+test("the goal skill leaves approve and merge to the user", () => {
+  const text = readFileSync(join(PLUGIN, "skills/goal/SKILL.md"), "utf8");
+  expect(text).toContain("never approve");
+  expect(text).toContain("yourself");
+});
+
+test("the Claude review command gives the prompt on stdin, not after a variadic flag", () => {
+  const text = skillText("goal");
+  const cmd = text.split("\n").find((l) => l.includes("claude -p") && l.includes("--allowedTools"));
+  expect(cmd, "review command").toBeTruthy();
+  const args = cmd!.slice(cmd!.indexOf("claude -p")).replace(/`/g, "").trim();
+  // Nothing may follow the tool list: a quoted prompt there would be taken as one more tool name.
+  expect(args).toMatch(/--allowedTools(?: [A-Z][A-Za-z]*)+$/);
+  expect(cmd).toContain("git diff");
+  expect(cmd).toContain("PASS or FAIL");
+  expect(cmd!.indexOf("PASS or FAIL")).toBeLessThan(cmd!.indexOf("claude -p"));
+});
+
+test("the Claude review command starts claude without CLAUDECODE and CLAUDE_CODE_* variables", () => {
+  const cmd = skillText("goal").split("\n").find((l) => l.includes("claude -p") && l.includes("--allowedTools"))!;
+  // Run what follows the pipe, with a stub claude that prints its environment.
+  const tail = cmd.slice(cmd.indexOf("} | ") + 4).replace(/`$/, "").replace(/ claude -p .*$/, " claude");
+  const bin = mkdtempSync(join(tmpdir(), "hq-plugin-"));
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\nenv\n");
+  chmodSync(join(bin, "claude"), 0o755);
+  const env = { PATH: `${bin}:${process.env.PATH}`, CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_SSE_PORT: "1234", CLAUDE_KEPT: "yes" };
+  for (const shell of ["sh", "bash", "zsh"]) {
+    const r = Bun.spawnSync([shell, "-c", tail], { env });
+    if (r.exitCode === 127 && shell === "zsh") continue;
+    const names = r.stdout.toString().split("\n").map((l) => l.split("=")[0]);
+    expect(r.exitCode, `${shell}: ${r.stderr}`).toBe(0);
+    expect(names, shell).toContain("CLAUDE_KEPT");
+    expect(names.filter((n) => n === "CLAUDECODE" || n!.startsWith("CLAUDE_CODE_")), shell).toEqual([]);
+  }
+});
+
+test("the multi-task goal template is read by hq trace: goal criteria under criteria, task criteria under acceptance", () => {
+  const line = skillText("goal").split("\n").find((l) => l.includes('"tasks"') && l.includes('"criteria"'));
+  expect(line, "multi-task template").toBeTruthy();
+  const file = JSON.parse(line!.slice(line!.indexOf("{"), line!.lastIndexOf("}") + 1));
+  // A task criterion that serves the first goal criterion, as the skill describes.
+  const [name, task] = Object.entries<any>(file.tasks)[0]!;
+  task.acceptance = [{ text: task.acceptance[0], traces: "g1" }];
+
+  const repo = mkdtempSync(join(tmpdir(), "hq-plugin-"));
+  const git = (...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  };
+  git("init", "-q", "-b", "goal/demo");
+  Bun.spawnSync(["mkdir", "goals"], { cwd: repo });
+  writeFileSync(join(repo, "goals/demo.json"), JSON.stringify(file));
+  git("add", ".");
+  git("commit", "-q", "-m", "goal");
+
+  const read = readCriteria(repo, "demo");
+  expect(read.goal.map((g) => g.id)).toEqual(file.criteria.map((_: string, i: number) => `g${i + 1}`));
+  expect(read.goal.length).toBeGreaterThan(0);
+  expect(read.tasks.map((t) => t.task)).toContain(name);
+  expect(trace(repo, "demo").dangling).toEqual([]);
+});
+
+test("README exists", () => {
+  expect(existsSync(join(PLUGIN, "README.md"))).toBe(true);
+});

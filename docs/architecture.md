@@ -27,8 +27,11 @@ hq/                   合入锁（M0.1）：hq approve / merge / install-hook，
   src/trace.ts        验收标准的溯源（`hq trace <目标> [--check-with [<命令>]]`）：goals/<目标>.json 顶层 `criteria` 的条目依次是 g1、g2…；任务标准写成 `{"text", "traces": "g1"}`。报告没有 trace 的任务标准、trace 指向不存在的目标标准、没有任务指向的目标标准，有就非零退出；`--check-with` 把每条 trace 的两段文字交给外部命令（默认新的 `claude -p`，在空目录里、只从 stdin 收这两段）答 SERVES 或 DOES-NOT-SERVE，DOES-NOT-SERVE、命令失败、答案不明确都算不过
   src/versions.ts     安装版本（M0.4）：~/.hq/versions/<commit>、current / previous、启动器 ~/.hq/bin/hq
   src/guard.ts        reference-transaction 钩子：main 只能移到已批准目标的合并提交
+  src/work.ts         干活（`hq work <目标> [--task <任务>] [--model <id>] [--notes <文件>]`）：在目标的 worktree 里用单独的 `claude -p` 会话（stream-json、effort high、默认 claude-sonnet-5-5）做一个任务，提示词取自 goals/<目标>.json（任务标题、编号的验收标准、scope 默认仓库根、check 命令，加上 notes 文件的文字）；全部 stream-json 日志存 $HQ_HOME/work/<仓库>/，任务还没有 task.start 就按会话前的目标头记一条，成本照 `hq task cost --from` 记；会话以错误或用量上限结束，记完成本后非零退出；目标分支、worktree 或任务不存在时什么都不启动
+  src/settings.ts     执行者会话的 Claude Code 设置（`--settings`）：沙箱严格开启，main 的 ref、packed-refs、git hooks 和 config 禁写，凭据文件对 shell 和 Read 工具都不可读，除本机端口外无网络
   src/sandbox.ts      执行者沙箱规则，用 srt（sandbox-runtime）跑命令
   test/               假执行者的端到端测试：真 git、真 worktree、真沙箱
+plugin/               hq 的 Claude Code 插件（也是本地 marketplace `headquarter`）：`setup` 技能（装钩子、写 .hq.json）和 `goal` 技能（验收标准、hq work、关卡、交给你批准）；批准和合入始终是你在终端里做
 eval/                 第 0 步：考出题者（SWE-bench-Live 题、出题、判卷、汇总）
   src/merge-runs.ts   把几次运行的结果合成一份，每道题取最新的判卷（`bun src/merge-runs.ts <out> <run>...`）
   src/ab.ts           两份合并结果逐题对比：修好、弄坏、不变，两边都判了的题上的抓住率（`bun src/ab.ts <a> <b> [--ids <file>]`）
