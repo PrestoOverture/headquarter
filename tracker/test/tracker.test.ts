@@ -255,6 +255,25 @@ test('fix subjects distinguish leading fixes, bugs anywhere, and style work', ()
   for (const [subject, expected] of cases) expect(isFixSubject(subject)).toBe(expected);
 });
 
+test.each([
+  ["v1.0.x delta (A'/B'): Codex-review fixes; credential isolation de-escalated", true],
+  ['P8 fix: stand points clear', true],
+  ['M1.0 review round 6 fixes: feedback trusts only known test names', true],
+  ['Typo fix', true],
+  ['Step 26.0.1: TTL contract bulk forward fix (5 issues)', true],
+  ['commit README, dedup backend_api, fix MQTT compute ref', true],
+  ['test(ui): wait for measured frame instead of a fixed delay', false],
+  ['4.5 fix loop and 4.6 failure path', false],
+  ['Prompt hardening + native loop mechanism for compile-fix recovery', false],
+  ['goal hq-m12-fixes: start', false],
+  ["Merge branch 'fix/turn-recovery' into main", false],
+  ['Phase B: Task 5 campaign results (fully-fixed system)', false],
+  ['format fix', false],
+  ['Replace the fixed 30-min job cap with an idle timeout', false],
+])('label and clause fix subject: %s → %s', (subject, expected) => {
+  expect(isFixSubject(subject)).toBe(expected);
+});
+
 test('formatter reflow into three lines does not rework the original line', () => {
   const r=repo(); const a=r.commit('const values = ["alpha", "beta", "gamma"];\n','feature A',10);
   const fix=r.commit("const values = [\n  'alpha', 'beta',\n  'gamma',]\n",'fix layout',2000);

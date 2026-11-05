@@ -14,10 +14,12 @@ const EXACT_SLACK_MS = 10 * MIN;
 const NEAR_MS = 10 * MIN;
 const FIX_WORDS = /\b(bug|bugs|regression|revert|hotfix)\b|修复|修正|回滚/i;
 const FIX_START = /^(?:[^:]{1,60}: )?fix(?:es|ed)?\b/i;
+const FIX_NOUN = /(?:^|\s)fix(?:es)?\s*(?:[:;,(]|$)/i;
+const FIX_CLAUSE = /[,;]\s+fix(?:es|ed)?\s/i;
 const STYLE_WORDS = /\b(lint|biome|eslint|prettier|format|formatting)\b/i;
 
 export function isFixSubject(subject: string): boolean {
-  return !STYLE_WORDS.test(subject) && (FIX_WORDS.test(subject) || FIX_START.test(subject));
+  return !STYLE_WORDS.test(subject) && (FIX_WORDS.test(subject) || FIX_START.test(subject) || FIX_NOUN.test(subject) || FIX_CLAUSE.test(subject));
 }
 const DOC_PATH = /(^|\/)docs\/|\.(md|mdx|rst|txt)$/;
 const TEST_PATH = /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.|_test\.|(^|\/)test_[^/]*\.py$/;
