@@ -30,7 +30,7 @@ export function parseCodex(text: string, file: string): Session | null {
   const s = emptySession("codex", "", file);
   let lastAssistant: number | null = null;
   let attributed = false; // a task_started with turn_attribution was seen
-  const oldPrompts: number[] = [];
+  const oldPrompts: Session['events'] = [];
   const oldWaits: number[] = [];
   let lastAssistantOld: number | null = null;
   const commitCalls = new Set<string>(); // call ids whose command makes commits
@@ -45,6 +45,8 @@ export function parseCodex(text: string, file: string): Session | null {
     }
     const p = d.payload && typeof d.payload === "object" ? d.payload : {};
     const t = touch(s, d.timestamp);
+    const event: Session['events'][number] = { at: t ?? s.end };
+    s.events.push(event);
 
     if (d.type === "session_meta") {
       s.id = p.id ?? p.session_id ?? s.id;
@@ -68,16 +70,21 @@ export function parseCodex(text: string, file: string): Session | null {
     if (d.type === "event_msg") {
       if (p.type === "token_count" && p.info?.total_token_usage) {
         const u = p.info.total_token_usage;
+        const prev = s.tokens ?? {input: 0, cached: 0, output: 0};
+        event.input = Math.max(0, (u.input_tokens ?? 0) - prev.input);
+        event.cached = Math.max(0, (u.cached_input_tokens ?? 0) - prev.cached);
+        event.output = Math.max(0, (u.output_tokens ?? 0) - prev.output);
         s.tokens = { input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0 };
       } else if (p.type === "task_started" && p.turn_attribution) {
         attributed = true;
         if (HUMAN_TRIGGERS.has(p.turn_attribution.turn_trigger) && !s.headless) {
           s.humanPrompts++;
-          if (t !== null && lastAssistant !== null && t > lastAssistant) s.waitMs += Math.min(t - lastAssistant, WAIT_CAP_MS);
+          event.humanPrompts = 1;
+          if (t !== null && lastAssistant !== null && t > lastAssistant) s.waitMs += event.waitMs = Math.min(t - lastAssistant, WAIT_CAP_MS);
           lastAssistant = null;
         }
       } else if (p.type === "turn_aborted") {
-        if (!s.headless) s.interrupts++;
+        if (!s.headless) { s.interrupts++; event.interrupts = 1; }
       } else if (p.type === "task_complete" && t !== null) {
         lastAssistant = t;
       }
@@ -91,7 +98,7 @@ export function parseCodex(text: string, file: string): Session | null {
       } else if (p.type === "message" && t !== null) {
         if (p.role === "assistant") lastAssistantOld = t;
         if (p.role === "user" && looksTyped(userText(p))) {
-          oldPrompts.push(t);
+          oldPrompts.push(event);
           oldWaits.push(lastAssistantOld !== null && t > lastAssistantOld ? Math.min(t - lastAssistantOld, WAIT_CAP_MS) : 0);
           lastAssistantOld = null;
         }
@@ -100,6 +107,7 @@ export function parseCodex(text: string, file: string): Session | null {
   }
   if (!s.id) return null;
   if (!attributed && !s.headless) {
+    oldPrompts.forEach((event, i) => { event.humanPrompts = 1; event.waitMs = oldWaits[i]; });
     s.humanPrompts = oldPrompts.length;
     s.waitMs = oldWaits.reduce((a, b) => a + b, 0);
   }

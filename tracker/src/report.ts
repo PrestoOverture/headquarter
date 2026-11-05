@@ -96,10 +96,10 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
 <h2>按组合</h2>
 <div class="scroll"><table id="summary"></table></div>
 <ul class="notes">
-  <li>任务 = 一个根会话加它派出的所有会话（Claude 子 agent、经 MCP 派给 Codex 的活、Codex 子 agent 和审查）。一个长会话里做了几件事，这里算一件。</li>
+  <li>任务 = 一件工作：从人的提示开始，产生提交后遇到下一条人的提示才分成下一件；没有提交的连续提示归在一起。子会话按启动时间归到父会话当时的任务；没有人的提示的后台会话仍算一件。</li>
   <li>合入率 = 有提交的任务里，至少一个提交进了主分支的比例。最近几天的任务可能还没合。</li>
   <li>14 天返工：合入的提交在 14 天内被回滚，或它写的行被别的以 fix/bug/修复 为题的提交改掉或删掉（git blame）。只算已过 14 天的任务（n）。</li>
-  <li>花费只有 Claude 的美元数；Codex 的记录里只有 token，按百万 token 列出（不含缓存命中的输入）。</li>
+  <li>花费只有 Claude 的美元数，按各任务的 assistant token 用量分摊（缺少用量时均分）；Codex 按累计 token 的增量分摊，按百万 token 列出（不含缓存命中的输入）。</li>
   <li>插话 = 人发的消息数（含第一条）；等你 = agent 做完到你下一条消息的时间，每段最多算 60 分钟。</li>
   <li>提交对上会话：「精确」是会话自己 git commit 的输出里有这个哈希；其余按仓库和时间猜（相差 10 分钟内）。</li>
 </ul>

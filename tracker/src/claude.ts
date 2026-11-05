@@ -57,6 +57,8 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
     } catch {
       continue;
     }
+    if (!parent && d.isSidechain) continue; // old layout: subagent turns inline in the main file
+    const t = touch(s, d.timestamp);
     if (d.type === "cost-state") {
       if (typeof d.totalCostUSD === "number") {
         const key = typeof d.startTime === "number" ? d.startTime : 0;
@@ -65,8 +67,6 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
       continue;
     }
     if (d.type !== "user" && d.type !== "assistant") continue;
-    if (!parent && d.isSidechain) continue; // old layout: subagent turns inline in the main file
-    const t = touch(s, d.timestamp);
     if (!seen) {
       seen = true;
       if (!parent && typeof d.sessionId === "string") s.id = d.sessionId;
@@ -76,8 +76,12 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
     if (!s.cwd && typeof d.cwd === "string") s.cwd = d.cwd;
     if (!s.gitBranch && typeof d.gitBranch === "string" && d.gitBranch) s.gitBranch = d.gitBranch;
     const content = d.message?.content;
+    const event: Session['events'][number] = { at: t ?? s.end };
+    s.events.push(event);
 
     if (d.type === "assistant") {
+      const usage = d.message?.usage;
+      if (usage) event.usage = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
       const model = d.message?.model;
       if (typeof model === "string" && model !== "<synthetic>") s.models[model] = (s.models[model] ?? 0) + 1;
       if (Array.isArray(content)) {
@@ -105,11 +109,13 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
     if (parent) continue; // a subagent's prompts come from its parent
     if (INTERRUPT.test(textOf(content).trimStart())) {
       s.interrupts++;
+      event.interrupts = 1;
       continue;
     }
     if (!isHumanPrompt(d, s.headless)) continue;
     s.humanPrompts++;
-    if (t !== null && lastAssistant !== null && t > lastAssistant) s.waitMs += Math.min(t - lastAssistant, WAIT_CAP_MS);
+    event.humanPrompts = 1;
+    if (t !== null && lastAssistant !== null && t > lastAssistant) s.waitMs += event.waitMs = Math.min(t - lastAssistant, WAIT_CAP_MS);
     lastAssistant = null;
   }
   if (!seen) return null;

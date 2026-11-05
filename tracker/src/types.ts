@@ -1,5 +1,5 @@
-// The tracker's model. A session is one agent's record (one file); a task is a root session plus
-// every session it spawned, across vendors. Times are epoch milliseconds.
+// The tracker's model. A session is one agent's record (one file); a task is one work episode plus
+// the child sessions started during it, across vendors. Times are epoch milliseconds.
 
 export type Vendor = "claude" | "codex";
 
@@ -7,6 +7,7 @@ export type Vendor = "claude" | "codex";
 export type Role = "root" | "subagent" | "review" | "delegated";
 
 export type Session = {
+  events: { at: number; humanPrompts?: number; interrupts?: number; waitMs?: number; usage?: number; input?: number; cached?: number; output?: number }[];
   vendor: Vendor;
   id: string;
   file: string;
@@ -59,7 +60,7 @@ export function commitShasIn(text: string): string[] {
 
 export function emptySession(vendor: Vendor, id: string, file: string): Session {
   return {
-    vendor, id, file, cwd: "", start: Infinity, end: -Infinity, times: [], models: {},
+    events: [], vendor, id, file, cwd: "", start: Infinity, end: -Infinity, times: [], models: {},
     headless: false, role: "root", humanPrompts: 0, interrupts: 0, waitMs: 0, commitShas: [], codexThreads: [],
   };
 }

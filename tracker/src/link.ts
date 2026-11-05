@@ -1,7 +1,8 @@
-// From sessions to tasks: a task is a root session (started by a person or a program) plus every
-// session it spawned, across vendors. Then the commits each task made, and what became of them.
+// Link commits to sessions first, then split root sessions into work episodes and attach
+// descendants to the episode in which their parent spawned them. Judge commits per episode.
 
 import { type Commit, originsOf, type Repo, type Repos } from "./git";
+import { splitEpisodes } from "./episodes";
 import { primaryModel, type Session } from "./types";
 
 const MIN = 60_000;
@@ -161,12 +162,68 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
     members.set(task, tree);
   }
 
-  attributeCommits(tasks, members, repos);
-  for (const t of tasks) judge(t, repos, now);
-  return tasks.sort((a, b) => a.start - b.start);
+  const commitSessions = new Map<string, Session>();
+  attributeCommits(tasks, members, repos, commitSessions);
+  const episodes: Task[] = [];
+  for (const task of tasks) {
+    const tree = members.get(task)!;
+    const root = tree[0]!;
+    const directChild = (s: Session): Session => {
+      const seen = new Set<string>();
+      while (s.parent && s.parent !== root.id && !seen.has(s.id)) {
+        seen.add(s.id);
+        const parent = byId.get(s.parent);
+        if (!parent) break;
+        s = parent;
+      }
+      return s;
+    };
+    const slices = splitEpisodes(root, task.commits.map(c => {
+      const session = commitSessions.get(c.sha)!;
+      return { at: c.at, sessionStart: session === root ? undefined : directChild(session).start };
+    }));
+    const indexAt = (at: number) => Math.max(0, slices.filter(s => s.start <= at).length - 1);
+    // Descendants stay with the episode their direct ancestor joined, even when they run longer.
+    const episodeOf = new Map<string, number>([[root.id, 0]]);
+    const assign = (s: Session): number => {
+      if (episodeOf.has(s.id)) return episodeOf.get(s.id)!;
+      const parent = byId.get(s.parent ?? '');
+      const i = !parent || parent === root ? indexAt(s.start) : assign(parent);
+      episodeOf.set(s.id, i);
+      return i;
+    };
+    for (const child of tree.slice(1)) assign(child);
+    slices.forEach((slice, i) => {
+      const children = tree.slice(1).filter(s => episodeOf.get(s.id) === i);
+      const group = [slice, ...children];
+      const kinds = new Set(children.map(kindOf));
+      const commits = task.commits.filter(c => {
+        const session = commitSessions.get(c.sha)!;
+        return session === root
+          ? indexAt(c.at) === i
+          : episodeOf.get(session.id) === i;
+      });
+      const models: Record<string, number> = {};
+      for (const s of group) for (const [m,n] of Object.entries(s.models)) models[m] = (models[m] ?? 0) + n;
+      const episode: Task = { ...task, id: slice.id, start: slice.start, end: Math.max(slice.end, ...children.map(s => s.end)),
+        combo: comboLabel(root, kinds), kinds: [...kinds].sort(), sessions: group.length, models: Object.keys(models),
+        costUSD: group.reduce((n,s) => n+(s.costUSD ?? 0),0),
+        codexTokens: group.reduce((n,s) => n+(s.tokens ? Math.max(0,s.tokens.input-s.tokens.cached)+s.tokens.output : 0),0),
+        humanPrompts: group.reduce((n,s) => n+s.humanPrompts,0),
+        interrupts: group.reduce((n,s) => n+s.interrupts,0), waitMs: group.reduce((n,s) => n+s.waitMs,0), commits,
+      };
+      judge(episode, repos, now);
+      episodes.push(episode);
+    });
+  }
+  const episodeCommits = episodes.flatMap(t => t.commits);
+  if (episodeCommits.length !== commitSessions.size || new Set(episodeCommits.map(c => c.sha)).size !== commitSessions.size) {
+    throw new Error("Episode split must preserve every linked commit exactly once");
+  }
+  return episodes.sort((a, b) => a.start - b.start);
 }
 
-function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: Repos) {
+function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: Repos, commitSessions: Map<string, Session>) {
   const owner = new Map<string, { task: Task; how: "exact" | "time" }>(); // full sha -> task
   const repoOfSha = new Map<string, Repo>();
 
@@ -181,6 +238,7 @@ function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: R
           if (!c || c.at < s.start - EXACT_SLACK_MS || c.at > s.end + EXACT_SLACK_MS) continue;
           if (!owner.has(c.sha)) {
             owner.set(c.sha, { task, how: "exact" });
+            commitSessions.set(c.sha, s);
             repoOfSha.set(c.sha, repo);
           }
           break;
@@ -206,14 +264,15 @@ function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: R
     if (!cands.length) continue;
     for (const c of repo.commits.values()) {
       if (owner.has(c.sha) || c.at < earliest) continue;
-      let best: { task: Task; d: number } | null = null;
+      let best: { task: Task; s: Session; d: number } | null = null;
       for (const { task, s } of cands) {
         if (c.at < s.start - NEAR_MS || c.at > s.end + NEAR_MS) continue;
         const d = distance(s, c.at);
-        if (d <= NEAR_MS && (!best || d < best.d)) best = { task, d };
+        if (d <= NEAR_MS && (!best || d < best.d)) best = { task, s, d };
       }
       if (best) {
         owner.set(c.sha, { task: best.task, how: "time" });
+        commitSessions.set(c.sha, best.s);
         repoOfSha.set(c.sha, repo);
       }
     }
@@ -245,7 +304,7 @@ function judge(task: Task, repos: Repos, now: number) {
   const repo = repos.all().find((r) => task.commits.every((tc) => r.commits.has(tc.sha))) ??
     repos.all().find((r) => r.commits.has(task.commits[0]!.sha));
   if (!repo) return;
-  const own = new Set(task.commits.map((c) => c.sha));
+  const own = new Set(task.commits.map(c => c.sha));
   const later = mainlineByTime(repo);
   for (const tc of task.commits) {
     tc.mature = now - tc.at >= REWORK_WINDOW_MS;
