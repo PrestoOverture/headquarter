@@ -2,6 +2,22 @@
 
 按时间记录做项目的过程：做了什么、遇到了什么、学到了什么。新条目加在最上面。
 
+## 2026-11-06 T2 第一步：解析器插件化，接入 OpenCode，补齐四项基础指标
+
+- 做了什么（用户睡觉期间，全在 `t2-plugins` 分支，未合入 main、未推送；代码由 Codex 写，Claude 逐步复核）：
+  - 写了接口草案 [t2-interface.md](t2-interface.md)：插件接口 `SourcePlugin`（name、默认路径、detect、read）、统一的 token 结构（输入不含缓存、缓存读、缓存写、输出含推理、其中推理）、result 四项基础指标。
+  - 把 Claude、Codex 两个解析器改成插件。验证方法：旧代码和新代码在同一时刻、同一份数据上各跑一次，1899 个任务逐字段一致（第一次拿过时的基线比，Codex 因数据变了停下报告，不是代码问题）。
+  - 新增 OpenCode 插件：只读打开 `~/.local/share/opencode/opencode.db`，只查 session、message、part 三张表（库里还有账号表，不碰）。本机 14 个会话（5–6 月，low_code 和 resume），拼成 23 个任务，28 个提交。
+  - 报表把「Codex Mtok/任务」换成四列 token（输入、缓存读、缓存写、输出，千个/任务，所有 agent 都有），合入率旁标 n，分组加「组合 × agent」「组合 × 模型」。改前改后同一数据对比，除 token 外数字全部不变。
+  - 返工的修复标题规则放宽：标签后的名词用法（「Codex-review fixes;」「P8 fix:」「review round 6 fixes:」「Typo fix」）和逗号/分号后的动词（「…, fix MQTT compute ref」）也算；「fixed delay」「fix loop」「compile-fix」「hq-m12-fixes」、分支名 `fix/…` 不算。57 个测试通过。
+- 结果 / 数据（成熟的合入任务，14 天返工）：claude 单干 8%（n=117，原 6%），claude → codex 19%（n=31），codex 单干 24%（n=29），opencode 单干 33%（n=12，原 8%），opencode → opencode-sub 0%（n=4）。新增的返工逐条看过，基本是真修复（同日 forward fix、review 轮次修正、TS 移植后的诊断修复）。
+- 新发现的盲区：
+  - 改写过历史的提交（rebase、filter-branch）：会话输出里的哈希已不存在，精确对上失效，退回按时间猜。OpenCode 的 28 个提交全是这样（0 个精确），时间猜的结果仍落在正确的会话上。
+  - 混合提交：一个提交既清理又修复（「commit README, dedup backend_api, fix MQTT…」），删掉的清理行也会算返工。提交粒度分不开。
+  - Claude 记录里输入几乎全走缓存（每任务未缓存输入不到 1k，缓存读上千万），Codex 未缓存输入高得多；四列分开列出，不合成一个数。
+  - OpenCode 的 `opencode run`（无人值守）在记录里还看不出来，目前全当交互式。
+- 下一步（等用户定）：形态（npm 包 + 本地看板 + MCP 查询）、包名、看板样子、是否合入 main。
+
 ## 2026-11-05 第一次接 CI：只有 coding_agent 有 CI，而且量的是主线红不红
 
 - 做了什么：用 `--ci` 跑了一次（经 `gh api` 只读查 GitHub check runs，按提交缓存在 ~/.cache/agent-tracker/ci.json）。问了 537 个提交，用了 16 分钟；没推送或查不到的提交不进缓存，每次都会重问。
