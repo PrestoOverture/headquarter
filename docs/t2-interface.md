@@ -38,7 +38,8 @@ tokens: { input: number; cacheRead: number; cacheWrite: number; output: number; 
 ```
 
 - `input` 是**未命中缓存**的输入。Claude 的 `input_tokens` 本来就是这个意思；Codex 的 `input_tokens` 含缓存，要减去 `cached_input_tokens`；OpenCode 的 `tokens.input` 不含缓存读。
-- 记录里没有的项填 0（例如 Codex 没有 cacheWrite，Claude 没有单独的 reasoning）。
+- `output` 是全部输出，**包含** reasoning；`reasoning` 是其中的推理部分，只作参考，不能和 output 相加。Codex 的 `output_tokens` 本来就含推理；OpenCode 的 `tokens.output` 不含，插件要把 `tokens.reasoning` 加进 output。
+- 记录里没有的项填 0（例如 Codex 没有 cacheWrite，Claude 不单独记 reasoning）。
 - `costUSD` 保留为可选：只有记录自己写了钱（Claude 的 cost-state、OpenCode 的 `cost`）才填，不按价目表换算。
 
 其余字段（时间、cwd、模型、role、parent、人类提示、打断、等待、提交 sha）语义不变。
@@ -71,7 +72,7 @@ tokens: { input: number; cacheRead: number; cacheWrite: number; output: number; 
 
 ## OpenCode 插件要点
 
-- 位置：`~/.local/share/opencode/opencode.db`（sqlite，用只读模式打开；数据库里还有账号表，插件只查 `session`、`message`、`part` 三张表）。
+- 位置：`~/.local/share/opencode/opencode.db`（sqlite，用只读模式打开（`?mode=ro`），OpenCode 正在运行时也能读；数据库里还有账号表，插件只查 `session`、`message`、`part` 三张表）。
 - 会话：`session` 表一行一个；`parent_id` 不空的是子会话（task 工具派生），role = subagent。
 - 模型：assistant 消息的 `modelID`（带 `providerID`）。
 - token / 花费：assistant 消息的 `tokens` 和 `cost`。
