@@ -1,7 +1,7 @@
 // Link commits to sessions first, then split root sessions into work episodes and attach
 // descendants to the episode in which their parent spawned them. Judge commits per episode.
 
-import { type Commit, originsOf, type Repo, type Repos } from "./git";
+import { type Commit, originEvidence, type ReworkLine, type Repo, type Repos } from "./git";
 import { splitEpisodes } from "./episodes";
 import { primaryModel, type Session } from "./types";
 
@@ -28,6 +28,7 @@ export type TaskCommit = {
   how: "exact" | "time";
   revertedBy?: string;
   reworkedBy: string[];
+  reworkEvidence: { sha: string; subject: string; days: number; lines: ReworkLine[] }[];
   mature: boolean; // the rework window has passed
 };
 
@@ -282,7 +283,7 @@ function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: R
     const c = repoOfSha.get(sha)!.commits.get(sha)!;
     task.commits.push({
       sha, at: c.at, subject: c.subject, added: c.added, deleted: c.deleted, mainline: c.mainline, how,
-      reworkedBy: [], mature: false,
+      reworkedBy: [], reworkEvidence: [], mature: false,
     });
   }
   for (const t of tasks) t.commits.sort((a, b) => a.at - b.at);
@@ -317,11 +318,17 @@ function judge(task: Task, repos: Repos, now: number) {
       if (d.body.includes(`This reverts commit ${c.sha}`)) {
         tc.revertedBy = d.sha;
         tc.reworkedBy.push(d.sha);
+        tc.reworkEvidence.push({ sha: d.sha, subject: d.subject, days: (d.at - c.at) / DAY, lines: [] });
         continue;
       }
       if (d.parents.length > 1 || !FIX_WORDS.test(d.subject)) continue;
       // a fix counts only if it rewrites or deletes lines this commit wrote
-      if (d.files.some((f) => files.has(f)) && originsOf(repo, d.sha).has(c.sha)) tc.reworkedBy.push(d.sha);
+      if (!d.files.some((f) => files.has(f))) continue;
+      const lines = originEvidence(repo, d.sha).get(c.sha);
+      if (lines) {
+        tc.reworkedBy.push(d.sha);
+        tc.reworkEvidence.push({ sha: d.sha, subject: d.subject, days: (d.at - c.at) / DAY, lines });
+      }
     }
   }
   const landed = task.commits.filter((c) => c.mainline);

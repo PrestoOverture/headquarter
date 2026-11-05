@@ -18,6 +18,7 @@ function slim(t: Task) {
     reverted: t.reverted, mature: t.mature, ci: t.ci ?? null,
     commits: t.commits.map((c) => ({
       sha: c.sha.slice(0, 10), at: c.at, subject: c.subject.slice(0, 120), added: c.added, deleted: c.deleted,
+      reworkEvidence: c.reworkEvidence,
       mainline: c.mainline, how: c.how, reworked: c.reworkedBy.length > 0, reverted: !!c.revertedBy, mature: c.mature,
     })),
   };
@@ -107,6 +108,8 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
 <summary>任务明细（最近 300 个）</summary>
 <div class="scroll" style="margin-top:8px"><table id="tasks"></table></div>
 </details>
+<h2>返工明细</h2>
+<div class="scroll"><table id="rework"></table></div>
 </main>
 <script>
 const DATA = ${data};
@@ -153,6 +156,8 @@ function render() {
     num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.codexMTokPerTask, 2),
     num(r.promptsPerTask), num(r.interruptsPerTask, 2), num(r.waitMinPerTask), num(r.linesLandedPerTask, 0), pct(r.exactShare),
   ].map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
+
+  $("rework").innerHTML = "<tr>" + ["日期", "组合", "仓库", "提交", "修复提交", "间隔天数", "证据"].map(h => "<th>" + h + "</th>").join("") + "</tr>" + ts.flatMap(t => t.commits.filter(c => c.mainline && c.reworked).flatMap(c => c.reworkEvidence.map(f => "<tr>" + [day(c.at), esc(t.combo), esc(t.repo || "–"), esc(c.sha + " " + c.subject), esc(f.sha + " " + f.subject), num(f.days), f.lines.map(l => esc(l.file + ": " + l.text)).join("<br>")].map(v => '<td class="l">' + v + "</td>").join("") + "</tr>"))).join("");
 
   const recent = ts.slice().sort((a, b) => b.start - a.start).slice(0, 300);
   const th = ["开始", "组合", "仓库", "主模型", "提交（合入）", "结果", "$", "Codex Mtok", "插话", "提交"];

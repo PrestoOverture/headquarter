@@ -150,25 +150,31 @@ export class Repos {
   }
 }
 
-const originsCache = new Map<string, Set<string>>();
+export type ReworkLine = { file: string; text: string };
+const originsCache = new Map<string, Map<string, ReworkLine[]>>();
 
 /**
- * The commits that wrote the lines `sha` changed or deleted: `git blame` of its parent over each
- * hunk's old range. Pure insertions blame nothing.
+ * Cached evidence from blame of the parent over deleted ranges. Text added anywhere in the
+ * same diff is a move, and short or punctuation-only deletions are ignored.
  */
-export function originsOf(repo: Repo, sha: string): Set<string> {
+export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[]> {
   const key = `${repo.key}@${sha}`;
   const hit = originsCache.get(key);
   if (hit) return hit;
-  const origins = new Set<string>();
+  const origins = new Map<string, ReworkLine[]>();
   const diff = run(["git", "diff", "-U0", "--no-renames", "--no-color", `${sha}^`, sha], repo.top);
   if (diff.code === 0) {
+    const added = new Set<string>();
     const ranges = new Map<string, string[]>();
     let file: string | null = null;
+    let inHunk = false;
     for (const line of diff.out.split("\n")) {
-      if (line.startsWith("--- ")) file = line === "--- /dev/null" ? null : line.slice(6);
+      if (line.startsWith("diff --git ")) inHunk = false;
+      if (inHunk && line.startsWith("+")) added.add(line.slice(1).trim());
+      if (!inHunk && line.startsWith("--- ")) file = line === "--- /dev/null" ? null : line.slice(6);
       const m = line.match(/^@@ -(\d+)(?:,(\d+))? /);
-      if (m && file) {
+      if (m) inHunk = true;
+      if (m && file && !LOCKFILES.test(file)) {
         const start = Number(m[1]);
         const count = m[2] === undefined ? 1 : Number(m[2]);
         if (count > 0) ranges.set(file, [...(ranges.get(file) ?? []), "-L", `${start},+${count}`]);
@@ -177,12 +183,24 @@ export function originsOf(repo: Repo, sha: string): Set<string> {
     for (const [f, ls] of ranges) {
       const blame = run(["git", "blame", "--porcelain", ...ls, `${sha}^`, "--", f], repo.top);
       if (blame.code !== 0) continue;
+      let origin = "";
       for (const l of blame.out.split("\n")) {
         const m = l.match(/^([0-9a-f]{40}) \d+ \d+/);
-        if (m) origins.add(m[1]!);
+        if (m) origin = m[1]!;
+        if (!l.startsWith("\t")) continue;
+        const text = l.slice(1).trim();
+        if (!origin || text.length < 4 || !/[\p{L}\p{N}]/u.test(text) || added.has(text)) continue;
+        const lines = origins.get(origin) ?? [];
+        if (lines.length < 5) lines.push({ file: f, text: text.slice(0, 160) });
+        origins.set(origin, lines);
       }
     }
   }
   originsCache.set(key, origins);
   return origins;
+}
+
+/** Origins of substantive deletions, excluding text added anywhere in the fix. */
+export function originsOf(repo: Repo, sha: string): Set<string> {
+  return new Set(originEvidence(repo, sha).keys());
 }

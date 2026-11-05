@@ -186,3 +186,49 @@ test('a time-linked commit in a record gap stays in the episode before the next 
   expect(tasks[0]!.commits.map(c=>[c.sha,c.how])).toEqual([[first,'exact'],[gap,'time']]);
   expect(tasks[1]!.commits).toHaveLength(0);
 });
+
+test('rework ignores re-indented moves across files, but records changed old text', () => {
+  const r=repo(); const a=r.commit('const original = "<old>";\n','feature A',10);
+  writeFileSync(join(r.dir,'file.txt'),'');
+  writeFileSync(join(r.dir,'new.txt'),'if (ready) {\n  const original = "<old>";\n}\n');
+  r.git(['add','.']); r.git(['commit','-m','fix move'],2000);
+  const move=r.git(['rev-parse','HEAD']);
+  const repos=new Repos(tmpdir());
+  const first=buildTasks([session(r.dir,[0],30,[a])],repos)[0]!.commits[0]!;
+  expect(first.reworkedBy).toEqual([]);
+  expect(originsOf(repos.of(r.dir)!,move).has(a)).toBe(false);
+
+  const changed=repo(); const original=changed.commit('const original = "<old>";\n','feature A',10);
+  const fix=changed.commit('const original = "new";\n','fix text',2000);
+  const c=buildTasks([session(changed.dir,[0],30,[original])],new Repos(tmpdir()))[0]!.commits[0]!;
+  expect(c.reworkedBy).toEqual([fix]);
+  expect(c.reworkEvidence).toEqual([{sha:fix,subject:'fix text',days:1990/86400,lines:[{file:'file.txt',text:'const original = "<old>";'}]}]);
+});
+
+test('deleting only a lone closing brace does not count as rework', () => {
+  const r=repo(); r.commit('const retained = true;\n','base',-2000);
+  const a=r.commit('const retained = true;\n}\n','feature A',10);
+  r.commit('const retained = true;\n','fix brace',2000);
+  const c=buildTasks([session(r.dir,[0],30,[a])],new Repos(tmpdir()))[0]!.commits[0]!;
+  expect(c.reworkedBy).toEqual([]); expect(c.reworkEvidence).toEqual([]);
+});
+
+test('report renders filtered rework details with escaped evidence', async () => {
+  const {html}=await import('../src/report');
+  const {runInNewContext}=await import('node:vm');
+  const r=repo(); const a=r.commit('const old = "<tag>";\n','feature A',10);
+  r.commit('const old = "new";\n','fix text',2000);
+  const tasks=buildTasks([session(r.dir,[0],30,[a])],new Repos(tmpdir()));
+  const page=html(tasks,{generatedAt:base,sessions:{claude:1,codex:0},repos:1,ci:false});
+  expect(page).toContain('<h2>返工明细</h2>');
+  const elements:Record<string,any>={};
+  const get=(id:string)=>elements[id]??=( {value:'',checked:id==='commits',innerHTML:'',addEventListener:()=>{}} );
+  runInNewContext(page.match(/<script>([\s\S]*)<\/script>/)![1]!,{document:{getElementById:get}});
+  expect(get('rework').innerHTML).toContain('file.txt: const old = &quot;&lt;tag&gt;&quot;;');
+  expect(get('rework').innerHTML).toContain('fix text');
+  get('repo').value='another repo';
+  // Re-run render with the same filter state.
+  const script=page.match(/<script>([\s\S]*)<\/script>/)![1]!;
+  runInNewContext(script,{document:{getElementById:get}});
+  expect(get('rework').innerHTML).not.toContain('fix text');
+});
