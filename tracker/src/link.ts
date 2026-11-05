@@ -1,7 +1,7 @@
 // Link commits to sessions first, then split root sessions into work episodes and attach
 // descendants to the episode in which their parent spawned them. Judge commits per episode.
 
-import { type Commit, originEvidence, type ReworkLine, type Repo, type Repos } from "./git";
+import { type Commit, originEvidence, sameLanding, type ReworkLine, type Repo, type Repos } from "./git";
 import { splitEpisodes } from "./episodes";
 import { primaryModel, type Session } from "./types";
 
@@ -12,7 +12,13 @@ export const REWORK_WINDOW_MS = 14 * DAY;
 const EXACT_SLACK_MS = 10 * MIN;
 /** How close a commit must be to one of a session's records to be guessed as that session's. */
 const NEAR_MS = 10 * MIN;
-const FIX_WORDS = /\b(fix|fixes|fixed|bug|bugs|regression|revert|hotfix)\b|修复|修正|回滚/i;
+const FIX_WORDS = /\b(bug|bugs|regression|revert|hotfix)\b|修复|修正|回滚/i;
+const FIX_START = /^(?:[^:]{1,60}: )?fix(?:es|ed)?\b/i;
+const STYLE_WORDS = /\b(lint|biome|eslint|prettier|format|formatting)\b/i;
+
+export function isFixSubject(subject: string): boolean {
+  return !STYLE_WORDS.test(subject) && (FIX_WORDS.test(subject) || FIX_START.test(subject));
+}
 const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|uv\.lock|poetry\.lock)$/;
 
 export type ChildKind = "claude-sub" | "codex" | "codex-sub" | "codex-review";
@@ -321,11 +327,11 @@ function judge(task: Task, repos: Repos, now: number) {
         tc.reworkEvidence.push({ sha: d.sha, subject: d.subject, days: (d.at - c.at) / DAY, lines: [] });
         continue;
       }
-      if (d.parents.length > 1 || !FIX_WORDS.test(d.subject)) continue;
+      if (d.parents.length > 1 || !isFixSubject(d.subject)) continue;
       // a fix counts only if it rewrites or deletes lines this commit wrote
       if (!d.files.some((f) => files.has(f))) continue;
       const lines = originEvidence(repo, d.sha).get(c.sha);
-      if (lines) {
+      if (lines && !sameLanding(repo, c.sha, d.sha)) {
         tc.reworkedBy.push(d.sha);
         tc.reworkEvidence.push({ sha: d.sha, subject: d.subject, days: (d.at - c.at) / DAY, lines });
       }

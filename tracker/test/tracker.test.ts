@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseClaude } from '../src/claude';
 import { parseCodex } from '../src/codex';
-import { buildTasks } from '../src/link';
+import { buildTasks, isFixSubject } from '../src/link';
 import { splitEpisodes } from '../src/episodes';
 import { Repos, originsOf } from '../src/git';
 import { emptySession, type Session } from '../src/types';
@@ -231,4 +231,55 @@ test('report renders filtered rework details with escaped evidence', async () =>
   const script=page.match(/<script>([\s\S]*)<\/script>/)![1]!;
   runInNewContext(script,{document:{getElementById:get}});
   expect(get('rework').innerHTML).not.toContain('fix text');
+});
+
+
+test('fix subjects distinguish leading fixes, bugs anywhere, and style work', () => {
+  const cases: [string, boolean][] = [
+    ['fix(ui): x', true], ['Fix repo-wide x', true], ['Cleanup: fix turn count', true],
+    ['4.7: validation and fix loop', false], ['Phase 2: bug in parser', true],
+    ['chore: run biome format', false], ['feat: add prefix', false],
+    ['fixes: x', true], ['fixed x', true], ['work: nested: fix x', false],
+    [`${'x'.repeat(60)}: fix x`, true], [`${'x'.repeat(61)}: fix x`, false],
+    ['work fixes x', false], ['fix lint issue', false], ['bug in formatting', false],
+    ['fix biome issue', false], ['fix eslint issue', false], ['fix prettier issue', false],
+    ['fix format issue', false], ['work regression', true], ['work hotfix', true],
+    ['work bugs', true], ['work revert', true], ['work 修复', true], ['work 修正', true], ['work 回滚', true],
+  ];
+  for (const [subject, expected] of cases) expect(isFixSubject(subject)).toBe(expected);
+});
+
+test('formatter reflow into three lines does not rework the original line', () => {
+  const r=repo(); const a=r.commit('const values = ["alpha", "beta", "gamma"];\n','feature A',10);
+  const fix=r.commit("const values = [\n  'alpha', 'beta',\n  'gamma',]\n",'fix layout',2000);
+  const repos=new Repos(tmpdir());
+  expect(originsOf(repos.of(r.dir)!,fix).has(a)).toBe(false);
+  expect(buildTasks([session(r.dir,[0],30,[a])],repos)[0]!.commits[0]!.reworkedBy).toEqual([]);
+});
+
+test('same PR fixes are excluded, but a later mainline fix counts', () => {
+  const r=repo(); r.commit('base content\n','base',-2000);
+  r.git(['checkout','-b','feature']);
+  const a=r.commit('original content\nsurviving content\n','feature A',10);
+  // Rewrite A on the branch so the same-landing exclusion has actual blame evidence.
+  const rewrite=r.commit('corrected content\nsurviving content\n','fix A',2100);
+  r.git(['checkout','main']); r.git(['merge','--no-ff','feature','-m','merge feature'],2200);
+  const later=r.commit('corrected content\nmainline correction\n','fix later',4000);
+  const repos=new Repos(tmpdir());
+  expect(originsOf(repos.of(r.dir)!,rewrite).has(a)).toBe(true);
+  expect(originsOf(repos.of(r.dir)!,later).has(a)).toBe(true);
+  expect(buildTasks([session(r.dir,[0],30,[a])],repos)[0]!.commits[0]!.reworkedBy).toEqual([later]);
+});
+
+test('reflow matches a complete subrun of added lines, with extra additions around it', () => {
+  const r=repo(); const a=r.commit('const values = ["alpha", "beta"];\n','feature A',10);
+  const fix=r.commit("const before = true;\nconst values = [\n  'alpha', 'beta',\n];\nconst after = true;\n",'fix layout',2000);
+  expect(originsOf(new Repos(tmpdir()).of(r.dir)!,fix).has(a)).toBe(false);
+});
+
+test('reflow cannot concatenate additions from separate hunks', () => {
+  const r=repo(); const retained='retained one\nretained two\nretained three\nretained four\n';
+  const a=r.commit('const values = ["alpha", "beta"];\n'+retained,'feature A',10);
+  const fix=r.commit("const values = [\n"+retained+"'alpha', 'beta'];\n",'fix content',2000);
+  expect(originsOf(new Repos(tmpdir()).of(r.dir)!,fix).has(a)).toBe(true);
 });

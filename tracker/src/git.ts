@@ -150,12 +150,76 @@ export class Repos {
   }
 }
 
+// Build the mainline chains and reverse edges only when a candidate pair needs them.
+const landingIndexes = new WeakMap<Repo, { chains: Map<string, number>[]; children: Map<string, string[]>; cache: Map<string, string[]> }>();
+function landings(repo: Repo, sha: string): string[] {
+  let index = landingIndexes.get(repo);
+  if (!index) {
+    const chains: Map<string, number>[] = [];
+    if (repo.main) {
+      const local = repo.main.replace(/^origin\//, "");
+      for (const ref of new Set([repo.main, local, `origin/${local}`])) {
+        const result = run(["git", "rev-list", "--first-parent", ref], repo.top);
+        if (result.code === 0) chains.push(new Map(result.out.trim().split("\n").map((s, i) => [s, i])));
+      }
+    }
+    const children = new Map<string, string[]>();
+    for (const c of repo.commits.values()) for (const parent of c.parents) {
+      const list = children.get(parent) ?? [];
+      list.push(c.sha);
+      children.set(parent, list);
+    }
+    index = { chains, children, cache: new Map() };
+    landingIndexes.set(repo, index);
+  }
+  const cached = index.cache.get(sha);
+  if (cached) return cached;
+  const result = index.chains.map(chain => {
+    // A chain commit lands via itself; otherwise find its earliest chain descendant.
+    let landing: string | undefined;
+    const seen = new Set<string>();
+    const stack = [sha];
+    while (stack.length) {
+      const next = stack.pop()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      const rank = chain.get(next);
+      if (rank !== undefined) {
+        if (!landing || rank > chain.get(landing)!) landing = next;
+      } else stack.push(...(index!.children.get(next) ?? []));
+    }
+    return landing;
+  }).filter((s): s is string => !!s);
+  index.cache.set(sha, result);
+  return result;
+}
+
+/** Both commits first entered a local or remote mainline through the same commit. */
+export function sameLanding(repo: Repo, a: string, b: string): boolean {
+  const first = landings(repo, a);
+  return landings(repo, b).some(sha => first.includes(sha));
+}
+
 export type ReworkLine = { file: string; text: string };
+const normalizeLine = (text: string) => text.replace(/[\s;,]/g, "").replace(/["'`]/g, '"');
+function isReflow(text: string, runs: string[][]): boolean {
+  const target = normalizeLine(text);
+  for (const run of runs) for (let start = 0; start < run.length; start++) {
+    let joined = "";
+    for (let end = start; end < run.length; end++) {
+      joined += run[end]!;
+      if (joined === target) return true;
+      if (!target.startsWith(joined)) break;
+    }
+  }
+  return false;
+}
 const originsCache = new Map<string, Map<string, ReworkLine[]>>();
 
 /**
  * Cached evidence from blame of the parent over deleted ranges. Text added anywhere in the
- * same diff is a move, and short or punctuation-only deletions are ignored.
+ * same diff is a move; equality with a normalized run of consecutive added lines within
+ * one hunk of the same file is a formatter reflow. Short or punctuation-only deletions are ignored.
  */
 export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[]> {
   const key = `${repo.key}@${sha}`;
@@ -165,12 +229,26 @@ export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[
   const diff = run(["git", "diff", "-U0", "--no-renames", "--no-color", `${sha}^`, sha], repo.top);
   if (diff.code === 0) {
     const added = new Set<string>();
+    const addedByFile = new Map<string, string[][]>();
+    let addedRun: string[] | undefined;
     const ranges = new Map<string, string[]>();
     let file: string | null = null;
     let inHunk = false;
     for (const line of diff.out.split("\n")) {
       if (line.startsWith("diff --git ")) inHunk = false;
-      if (inHunk && line.startsWith("+")) added.add(line.slice(1).trim());
+      if (inHunk && line.startsWith("+")) {
+        const text = line.slice(1).trim();
+        added.add(text);
+        if (file) {
+          if (!addedRun) {
+            addedRun = [];
+            const runs = addedByFile.get(file) ?? [];
+            runs.push(addedRun);
+            addedByFile.set(file, runs);
+          }
+          addedRun.push(normalizeLine(text));
+        }
+      } else addedRun = undefined;
       if (!inHunk && line.startsWith("--- ")) file = line === "--- /dev/null" ? null : line.slice(6);
       const m = line.match(/^@@ -(\d+)(?:,(\d+))? /);
       if (m) inHunk = true;
@@ -189,7 +267,7 @@ export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[
         if (m) origin = m[1]!;
         if (!l.startsWith("\t")) continue;
         const text = l.slice(1).trim();
-        if (!origin || text.length < 4 || !/[\p{L}\p{N}]/u.test(text) || added.has(text)) continue;
+        if (!origin || text.length < 4 || !/[\p{L}\p{N}]/u.test(text) || added.has(text) || isReflow(text, addedByFile.get(f) ?? [])) continue;
         const lines = origins.get(origin) ?? [];
         if (lines.length < 5) lines.push({ file: f, text: text.slice(0, 160) });
         origins.set(origin, lines);
