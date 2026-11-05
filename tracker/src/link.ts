@@ -90,7 +90,7 @@ export type Task = Classification & {
   reverted: boolean;
   reworked: boolean;
   mature: boolean;
-  ci?: "pass" | "fail";
+  ci?: "pass" | "broke" | "inherited" | "unknown";
 };
 
 function kindOf(s: Session): ChildKind {

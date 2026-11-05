@@ -42,7 +42,7 @@ if (values.since) {
 }
 const commits = tasks.flatMap((t) => t.commits);
 log(`${tasks.length} tasks in ${repos.all().length} repositories; ${commits.length} commits linked (${commits.filter((c) => c.how === "exact").length} exact)`);
-if (values.ci) addCi(tasks, repos, join(homedir(), ".cache/agent-tracker/ci.json"), log);
+if (values.ci) await addCi(tasks, repos, join(homedir(), ".cache/agent-tracker/ci-v3.json"), log);
 
 const out = resolve(values.out!);
 mkdirSync(dirname(out), { recursive: true });

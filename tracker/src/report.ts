@@ -29,10 +29,10 @@ const num = (x: number | null, d = 1) => (x === null ? "–" : x.toFixed(d));
 
 export function terminalTable(tasks: Task[]): string {
   const rows = aggregate(tasks, (t: Task) => t.combo);
-  const head = ["组合", "任务", "有提交", "合入率", "14天返工(成熟n)", "CI首过(n)", "$/任务", "$/合入", "Codex Mtok/任务", "插话/任务", "等你 分/任务"];
+  const head = ["组合", "任务", "有提交", "合入率", "14天返工(成熟n)", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "Codex Mtok/任务", "插话/任务", "等你 分/任务"];
   const body = rows.map((r) => [
     r.key, String(r.tasks), String(r.withCommits), pct(r.landedRate), `${pct(r.reworkRate)} (${r.mature})`,
-    `${pct(r.ciPassRate)} (${r.ci})`, num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.codexMTokPerTask, 2),
+    `${pct(r.ciBreakRate)} (${r.ci})`, String(r.ciInherited), num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.codexMTokPerTask, 2),
     num(r.promptsPerTask), num(r.waitMinPerTask),
   ]);
   const width = (s: string) => [...s].reduce((n, ch) => n + (ch.charCodeAt(0) > 0x2e80 ? 2 : 1), 0);
@@ -159,12 +159,12 @@ function render() {
   const ts = filtered();
   const rows = aggregate(ts, keyFn());
   if ($("group").value === "combo+month") rows.sort((a, b) => a.key.localeCompare(b.key));
-  const head = ["", "任务", "有提交", "合入率", "14天返工", "回滚", "CI首过", "$/任务", "$/合入", "Codex Mtok/任务", "插话/任务", "打断/任务", "等你 分/任务", "合入行数/任务", "精确对上"];
+  const head = ["", "任务", "有提交", "合入率", "14天返工", "回滚", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "Codex Mtok/任务", "插话/任务", "打断/任务", "等你 分/任务", "合入行数/任务", "精确对上"];
   $("summary").innerHTML = "<tr>" + head.map((h) => "<th>" + h + "</th>").join("") + "</tr>" + rows.map((r) => "<tr>" + [
     esc(r.key), r.tasks, r.withCommits, pct(r.landedRate),
     pct(r.reworkRate) + ' <span class="n">n=' + r.mature + "</span>",
     pct(r.revertRate),
-    pct(r.ciPassRate) + ' <span class="n">n=' + r.ci + "</span>",
+    pct(r.ciBreakRate) + ' <span class="n">n=' + r.ci + "</span>", r.ciInherited,
     num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.codexMTokPerTask, 2),
     num(r.promptsPerTask), num(r.interruptsPerTask, 2), num(r.waitMinPerTask), num(r.linesLandedPerTask, 0), pct(r.exactShare),
   ].map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");

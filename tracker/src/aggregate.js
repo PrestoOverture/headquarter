@@ -17,7 +17,9 @@ export function aggregate(tasks, keyOf) {
     const withCommits = ts.filter((t) => t.commits.length > 0);
     const landed = ts.filter((t) => t.landed);
     const mature = landed.filter((t) => t.mature);
-    const ci = ts.filter((t) => t.ci);
+    const ciPass = ts.filter((t) => t.ci === "pass").length;
+    const ciBroke = ts.filter((t) => t.ci === "broke").length;
+    const ci = ciPass + ciBroke;
     const sum = (list, f) => list.reduce((n, t) => n + f(t), 0);
     const cost = sum(ts, (t) => t.costUSD);
     rows.push({
@@ -29,8 +31,9 @@ export function aggregate(tasks, keyOf) {
       mature: mature.length,
       reworkRate: mature.length ? mature.filter((t) => t.reworked).length / mature.length : null,
       revertRate: mature.length ? mature.filter((t) => t.reverted).length / mature.length : null,
-      ci: ci.length,
-      ciPassRate: ci.length ? ci.filter((t) => t.ci === "pass").length / ci.length : null,
+      ci, ciPass, ciBroke,
+      ciInherited: ts.filter((t) => t.ci === "inherited").length,
+      ciBreakRate: ci ? ciBroke / ci : null,
       costPerTask: cost / ts.length,
       costPerLanded: landed.length ? cost / landed.length : null,
       codexMTokPerTask: sum(ts, (t) => t.codexTokens) / ts.length / 1e6,
