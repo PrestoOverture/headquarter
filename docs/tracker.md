@@ -41,3 +41,12 @@
 ## 第一步
 
 在作者自己的电脑上做原型：读 Claude Code 和 Codex 的日志（本机约 1.8 GB）加 git，出一张本地报表，看能不能从中看出东西（比如哪种组合返工最少）。
+
+## 本机日志格式（2026-11-05 核对）
+
+T0 开工前看的三家记录。格式都没公开承诺，下面是这台机器上看到的样子。
+
+- **Codex**（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`，旧的压成 `.jsonl.zst`）：每行 `{type, payload}`。第一行 `session_meta` 有 `cwd`、`git`（commit、branch、remote）、`originator`（`claude2codex` 是 Claude Code 经 MCP 派来的活）、`source`（`vscode`、`exec`，子 agent 是 `{subagent: {thread_spawn: {parent_thread_id, agent_role}}}` 或 `{subagent: "review"}`）。花费只有 token（`event_msg.token_count` 的累计值），没有美元。人的插话看 `task_started.turn_attribution.turn_trigger`（`composer`、`edit_user_message`），旧会话没有这个字段，只能数用户消息。
+- **Claude Code**（`~/.claude/projects/<目录>/<session>.jsonl`，子 agent 在 `<session>/subagents/agent-*.jsonl`）：每条消息带 `cwd`、`gitBranch`、`entrypoint`（`claude-desktop`、`cli` 是人用；`sdk-cli` 是 `claude -p`）。`cost-state` 记录给出整个进程的 `totalCostUSD`。人说的话：`origin.kind == "human"`，旧记录没有 `origin`，按 entrypoint 和内容排除。派给 Codex 的活：`codex_result` 的返回带 `thread_id`，就是 Codex 会话 id，本机 295 个 `claude2codex` 会话对上 210 个。
+- **OpenCode**（`~/.local/share/opencode/opencode.db`，SQLite）：`session` 表有 `parent_id`、`directory`、`cost`、token。本机只有 14 个会话，T0 不接。
+- **对提交**：会话里跑 `git commit` 的输出带 `[分支 短哈希]`，能精确对上；对不上的按仓库和时间窗口猜。Codex 的提交很少带署名。

@@ -1,0 +1,275 @@
+// From sessions to tasks: a task is a root session (started by a person or a program) plus every
+// session it spawned, across vendors. Then the commits each task made, and what became of them.
+
+import { type Commit, originsOf, type Repo, type Repos } from "./git";
+import { primaryModel, type Session } from "./types";
+
+const MIN = 60_000;
+const DAY = 86_400_000;
+export const REWORK_WINDOW_MS = 14 * DAY;
+/** Slack around a session's span for a commit its own output names (clock skew, a commit right after the last record). */
+const EXACT_SLACK_MS = 10 * MIN;
+/** How close a commit must be to one of a session's records to be guessed as that session's. */
+const NEAR_MS = 10 * MIN;
+const FIX_WORDS = /\b(fix|fixes|fixed|bug|bugs|regression|revert|hotfix)\b|修复|修正|回滚/i;
+const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|uv\.lock|poetry\.lock)$/;
+
+export type ChildKind = "claude-sub" | "codex" | "codex-sub" | "codex-review";
+
+export type TaskCommit = {
+  sha: string;
+  at: number;
+  subject: string;
+  added: number;
+  deleted: number;
+  mainline: boolean;
+  /** exact: the session's own `git commit` output names it; time: guessed from repository and time. */
+  how: "exact" | "time";
+  revertedBy?: string;
+  reworkedBy: string[];
+  mature: boolean; // the rework window has passed
+};
+
+export type Task = {
+  id: string;
+  vendor: Session["vendor"];
+  combo: string;
+  headless: boolean;
+  repo?: string;
+  repoKey?: string;
+  cwd: string;
+  start: number;
+  end: number;
+  model?: string;
+  models: string[];
+  kinds: ChildKind[];
+  sessions: number;
+  costUSD: number; // Claude sessions (cost-state); Codex records carry no prices
+  codexTokens: number; // uncached input + output
+  humanPrompts: number;
+  interrupts: number;
+  waitMs: number;
+  commits: TaskCommit[];
+  landed: boolean;
+  reverted: boolean;
+  reworked: boolean;
+  mature: boolean;
+  ci?: "pass" | "fail";
+};
+
+function kindOf(s: Session): ChildKind {
+  if (s.vendor === "claude") return "claude-sub";
+  if (s.role === "review") return "codex-review";
+  if (s.role === "delegated") return "codex";
+  return "codex-sub";
+}
+
+export function comboLabel(root: Session, kinds: Set<ChildKind>): string {
+  let name: string = root.vendor;
+  if (root.role === "delegated") name = "codex (via MCP, caller unknown)";
+  else if (root.role !== "root") name = `${root.vendor} ${root.role} (parent unknown)`;
+  if (root.headless && root.role === "root") name += " (headless)";
+  return kinds.size ? `${name} → ${[...kinds].sort().join(" + ")}` : `${name} solo`;
+}
+
+/** Index of the last element <= t, or -1. */
+function floorIndex(times: number[], t: number): number {
+  let lo = 0;
+  let hi = times.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid]! <= t) {
+      ans = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return ans;
+}
+
+/** Distance from `t` to the session's nearest record. */
+function distance(s: Session, t: number): number {
+  const i = floorIndex(s.times, t);
+  let d = Infinity;
+  if (i >= 0) d = t - s.times[i]!;
+  if (i + 1 < s.times.length) d = Math.min(d, s.times[i + 1]! - t);
+  return d;
+}
+
+export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()): Task[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  // Claude's Codex MCP results name the Codex thread: that is the delegated session's parent.
+  for (const s of sessions) {
+    for (const thread of s.codexThreads) {
+      const child = byId.get(thread);
+      if (child && !child.parent) child.parent = s.id;
+    }
+  }
+  const children = new Map<string, Session[]>();
+  const roots: Session[] = [];
+  for (const s of sessions) {
+    if (s.parent && byId.has(s.parent) && s.parent !== s.id) {
+      const list = children.get(s.parent) ?? [];
+      list.push(s);
+      children.set(s.parent, list);
+    } else roots.push(s);
+  }
+
+  const tasks: Task[] = [];
+  const members = new Map<Task, Session[]>();
+  for (const root of roots) {
+    const tree: Session[] = [];
+    const seen = new Set<string>();
+    const stack = [root];
+    while (stack.length) {
+      const s = stack.pop()!;
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      tree.push(s);
+      stack.push(...(children.get(s.id) ?? []));
+    }
+    const kinds = new Set(tree.filter((s) => s !== root).map(kindOf));
+    const repo = repos.of(root.cwd) ?? tree.map((s) => repos.of(s.cwd)).find(Boolean) ?? null;
+    const models: Record<string, number> = {};
+    for (const s of tree) for (const [m, n] of Object.entries(s.models)) models[m] = (models[m] ?? 0) + n;
+    const task: Task = {
+      id: root.id,
+      vendor: root.vendor,
+      combo: comboLabel(root, kinds),
+      headless: root.headless,
+      repo: repo?.name,
+      repoKey: repo?.key,
+      cwd: root.cwd,
+      start: Math.min(...tree.map((s) => s.start)),
+      end: Math.max(...tree.map((s) => s.end)),
+      model: primaryModel(root.models) ?? primaryModel(models),
+      models: Object.keys(models),
+      kinds: [...kinds].sort(),
+      sessions: tree.length,
+      costUSD: tree.reduce((n, s) => n + (s.costUSD ?? 0), 0),
+      codexTokens: tree.reduce((n, s) => n + (s.tokens ? Math.max(0, s.tokens.input - s.tokens.cached) + s.tokens.output : 0), 0),
+      humanPrompts: tree.reduce((n, s) => n + s.humanPrompts, 0),
+      interrupts: tree.reduce((n, s) => n + s.interrupts, 0),
+      waitMs: tree.reduce((n, s) => n + s.waitMs, 0),
+      commits: [],
+      landed: false,
+      reverted: false,
+      reworked: false,
+      mature: false,
+    };
+    tasks.push(task);
+    members.set(task, tree);
+  }
+
+  attributeCommits(tasks, members, repos);
+  for (const t of tasks) judge(t, repos, now);
+  return tasks.sort((a, b) => a.start - b.start);
+}
+
+function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: Repos) {
+  const owner = new Map<string, { task: Task; how: "exact" | "time" }>(); // full sha -> task
+  const repoOfSha = new Map<string, Repo>();
+
+  // 1. Exact: the session's own commit output names the commit, and it was made while the session ran.
+  for (const task of tasks) {
+    for (const s of members.get(task)!) {
+      for (const short of s.commitShas) {
+        const own = repos.of(s.cwd) ?? (task.repoKey ? repos.all().find((r) => r.key === task.repoKey) : undefined);
+        const candidates = own ? [own, ...repos.all().filter((r) => r !== own)] : repos.all();
+        for (const repo of candidates) {
+          const c = repo.byPrefix(short);
+          if (!c || c.at < s.start - EXACT_SLACK_MS || c.at > s.end + EXACT_SLACK_MS) continue;
+          if (!owner.has(c.sha)) {
+            owner.set(c.sha, { task, how: "exact" });
+            repoOfSha.set(c.sha, repo);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // 2. By time: a commit in a task's repository made close to one of its sessions' records.
+  const byRepo = new Map<string, { task: Task; s: Session }[]>();
+  for (const task of tasks) {
+    for (const s of members.get(task)!) {
+      const repo = repos.of(s.cwd);
+      if (!repo) continue;
+      const list = byRepo.get(repo.key) ?? [];
+      list.push({ task, s });
+      byRepo.set(repo.key, list);
+    }
+  }
+  const earliest = Math.min(...tasks.map((t) => t.start));
+  for (const repo of repos.all()) {
+    const cands = byRepo.get(repo.key) ?? [];
+    if (!cands.length) continue;
+    for (const c of repo.commits.values()) {
+      if (owner.has(c.sha) || c.at < earliest) continue;
+      let best: { task: Task; d: number } | null = null;
+      for (const { task, s } of cands) {
+        if (c.at < s.start - NEAR_MS || c.at > s.end + NEAR_MS) continue;
+        const d = distance(s, c.at);
+        if (d <= NEAR_MS && (!best || d < best.d)) best = { task, d };
+      }
+      if (best) {
+        owner.set(c.sha, { task: best.task, how: "time" });
+        repoOfSha.set(c.sha, repo);
+      }
+    }
+  }
+
+  for (const [sha, { task, how }] of owner) {
+    const c = repoOfSha.get(sha)!.commits.get(sha)!;
+    task.commits.push({
+      sha, at: c.at, subject: c.subject, added: c.added, deleted: c.deleted, mainline: c.mainline, how,
+      reworkedBy: [], mature: false,
+    });
+  }
+  for (const t of tasks) t.commits.sort((a, b) => a.at - b.at);
+}
+
+const sortedMainline = new WeakMap<Repo, Commit[]>();
+function mainlineByTime(repo: Repo): Commit[] {
+  let list = sortedMainline.get(repo);
+  if (!list) {
+    list = [...repo.commits.values()].filter((c) => c.mainline).sort((a, b) => a.at - b.at);
+    sortedMainline.set(repo, list);
+  }
+  return list;
+}
+
+/** Landed, reverted or reworked within the window, for one task's commits. */
+function judge(task: Task, repos: Repos, now: number) {
+  if (!task.commits.length) return;
+  const repo = repos.all().find((r) => task.commits.every((tc) => r.commits.has(tc.sha))) ??
+    repos.all().find((r) => r.commits.has(task.commits[0]!.sha));
+  if (!repo) return;
+  const own = new Set(task.commits.map((c) => c.sha));
+  const later = mainlineByTime(repo);
+  for (const tc of task.commits) {
+    tc.mature = now - tc.at >= REWORK_WINDOW_MS;
+    if (!tc.mainline) continue;
+    const c = repo.commits.get(tc.sha)!;
+    const files = new Set(c.files.filter((f) => !LOCKFILES.test(f)));
+    for (const d of later) {
+      if (d.at <= c.at || own.has(d.sha)) continue;
+      if (d.at - c.at > REWORK_WINDOW_MS) break;
+      if (d.body.includes(`This reverts commit ${c.sha}`)) {
+        tc.revertedBy = d.sha;
+        tc.reworkedBy.push(d.sha);
+        continue;
+      }
+      if (d.parents.length > 1 || !FIX_WORDS.test(d.subject)) continue;
+      // a fix counts only if it rewrites or deletes lines this commit wrote
+      if (d.files.some((f) => files.has(f)) && originsOf(repo, d.sha).has(c.sha)) tc.reworkedBy.push(d.sha);
+    }
+  }
+  const landed = task.commits.filter((c) => c.mainline);
+  task.landed = landed.length > 0;
+  task.reverted = landed.some((c) => !!c.revertedBy);
+  task.reworked = landed.some((c) => c.reworkedBy.length > 0);
+  task.mature = task.landed && landed.every((c) => c.mature);
+}
+
+export type { Commit };
