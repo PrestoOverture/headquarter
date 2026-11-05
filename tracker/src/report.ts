@@ -12,7 +12,7 @@ export type Meta = { generatedAt: number; sessions: { claude: number; codex: num
 /** What the page needs of a task (no file paths beyond the working directory, no prompt text). */
 function slim(t: Task) {
   return {
-    id: t.id, combo: t.combo, vendor: t.vendor, headless: t.headless, repo: t.repo ?? null, start: t.start, end: t.end,
+    id: t.id, kind: t.kind, size: t.size, combo: t.combo, vendor: t.vendor, headless: t.headless, repo: t.repo ?? null, start: t.start, end: t.end,
     model: t.model ?? null, kinds: t.kinds, sessions: t.sessions, costUSD: t.costUSD, codexTokens: t.codexTokens,
     humanPrompts: t.humanPrompts, interrupts: t.interrupts, waitMs: t.waitMs, landed: t.landed, reworked: t.reworked,
     reverted: t.reverted, mature: t.mature, ci: t.ci ?? null,
@@ -82,12 +82,16 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
 <p class="sub" id="meta"></p>
 <div class="filters">
   <label>仓库 <select id="repo"></select></label>
+  <label>类型 <select id="kind"></select></label>
+  <label>规模 <select id="size"></select></label>
   <label>从 <input type="date" id="from"></label>
   <label>到 <input type="date" id="to"></label>
   <label>分组 <select id="group">
     <option value="combo">组合</option>
     <option value="combo+model">组合 × 主模型</option>
     <option value="combo+month">组合 × 月份</option>
+    <option value="combo+kind">组合 × 类型</option>
+    <option value="combo+size">组合 × 规模</option>
     <option value="repo">仓库</option>
   </select></label>
   <label><input type="checkbox" id="commits" checked> 只看有提交的任务</label>
@@ -125,10 +129,16 @@ $("meta").textContent = "生成于 " + new Date(m.generatedAt).toLocaleString() 
 const repos = [...new Set(DATA.tasks.map((t) => t.repo).filter(Boolean))].sort();
 $("repo").innerHTML = '<option value="">全部</option>' + repos.map((r) => '<option>' + esc(r) + '</option>').join("");
 
+for (const [id, options] of [["kind", ["文档", "测试", "界面", "代码", "–"]], ["size", ["<100", "100–300", "300–1k", "≥1k", "–"]]]) {
+  $(id).innerHTML = '<option value="">全部</option>' + options.map(v => '<option>' + esc(v) + '</option>').join("");
+}
+
 function filtered() {
   const repo = $("repo").value, from = $("from").value, to = $("to").value;
   return DATA.tasks.filter((t) =>
     (!repo || t.repo === repo) &&
+    (!$("kind").value || t.kind === $("kind").value) &&
+    (!$("size").value || t.size === $("size").value) &&
     (!from || day(t.start) >= from) && (!to || day(t.start) <= to) &&
     ($("headless").checked || !t.headless) &&
     ($("norepo").checked || t.repo) &&
@@ -139,6 +149,8 @@ function keyFn() {
   const g = $("group").value;
   if (g === "combo+model") return (t) => t.combo + " · " + (t.model || "?");
   if (g === "combo+month") return (t) => t.combo + " · " + day(t.start).slice(0, 7);
+  if (g === "combo+kind") return (t) => t.combo + " · " + t.kind;
+  if (g === "combo+size") return (t) => t.combo + " · " + t.size;
   if (g === "repo") return (t) => t.repo || "(无仓库)";
   return (t) => t.combo;
 }
@@ -160,19 +172,19 @@ function render() {
   $("rework").innerHTML = "<tr>" + ["日期", "组合", "仓库", "提交", "修复提交", "间隔天数", "证据"].map(h => "<th>" + h + "</th>").join("") + "</tr>" + ts.flatMap(t => t.commits.filter(c => c.mainline && c.reworked).flatMap(c => c.reworkEvidence.map(f => "<tr>" + [day(c.at), esc(t.combo), esc(t.repo || "–"), esc(c.sha + " " + c.subject), esc(f.sha + " " + f.subject), num(f.days), f.lines.map(l => esc(l.file + ": " + l.text)).join("<br>")].map(v => '<td class="l">' + v + "</td>").join("") + "</tr>"))).join("");
 
   const recent = ts.slice().sort((a, b) => b.start - a.start).slice(0, 300);
-  const th = ["开始", "组合", "仓库", "主模型", "提交（合入）", "结果", "$", "Codex Mtok", "插话", "提交"];
+  const th = ["开始", "组合", "类型", "规模", "仓库", "主模型", "提交（合入）", "结果", "$", "Codex Mtok", "插话", "提交"];
   $("tasks").innerHTML = "<tr>" + th.map((h) => "<th>" + h + "</th>").join("") + "</tr>" + recent.map((t) => {
     const landedN = t.commits.filter((c) => c.mainline).length;
     const result = !t.commits.length ? "–" : !t.landed ? "未合入" : t.reverted ? '<span class="bad">回滚</span>' : t.reworked ? '<span class="bad">返工</span>' : t.mature ? '<span class="good">存活</span>' : "合入（观察中）";
     const commits = t.commits.slice(0, 4).map((c) => esc(c.sha.slice(0, 7) + " " + c.subject) + (c.how === "time" ? ' <span class="n">(猜)</span>' : "")).join("<br>") + (t.commits.length > 4 ? '<br><span class="n">…共 ' + t.commits.length + " 个</span>" : "");
     return "<tr>" + [
-      day(t.start), esc(t.combo), esc(t.repo || "–"), esc(t.model || "–"), t.commits.length + "（" + landedN + "）", result,
+      day(t.start), esc(t.combo), esc(t.kind), esc(t.size), esc(t.repo || "–"), esc(t.model || "–"), t.commits.length + "（" + landedN + "）", result,
       t.costUSD ? t.costUSD.toFixed(2) : "–", t.codexTokens ? (t.codexTokens / 1e6).toFixed(2) : "–", t.humanPrompts,
     ].map((c) => "<td>" + c + "</td>").join("") + '<td class="l">' + commits + "</td></tr>";
   }).join("");
 }
 
-for (const id of ["repo", "from", "to", "group", "commits", "headless", "norepo"]) $(id).addEventListener("input", render);
+for (const id of ["repo", "kind", "size", "from", "to", "group", "commits", "headless", "norepo"]) $(id).addEventListener("input", render);
 render();
 </script>
 </body>

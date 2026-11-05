@@ -283,3 +283,84 @@ test('reflow cannot concatenate additions from separate hunks', () => {
   const fix=r.commit("const values = [\n"+retained+"'alpha', 'beta'];\n",'fix content',2000);
   expect(originsOf(new Repos(tmpdir()).of(r.dir)!,fix).has(a)).toBe(true);
 });
+
+test('classifier uses line shares, ordered path rules, and size boundaries', async () => {
+  const {classifyTask}=await import('../src/link');
+  const classify=(fileLines:Record<string,number>)=>classifyTask([{mainline:true,fileLines}]);
+  expect(classify({'docs/guide.ts':60,'README.md':39})).toEqual({kind:'文档',size:'<100'});
+  expect(classify({'src/engine.test.ts':80,'src/engine.ts':20}).kind).toBe('测试');
+  expect(classify({'src/ui/App.tsx':80,'src/cli.ts':20}).kind).toBe('界面');
+  expect(classify({'src/query/engine.ts':1000})).toEqual({kind:'代码',size:'≥1k'});
+  for (const [lines,size] of [[99,'<100'],[100,'100–300'],[299,'100–300'],[300,'300–1k'],[999,'300–1k'],[1000,'≥1k']] as const) {
+    expect(classify({'src/engine.ts':lines}).size).toBe(size);
+  }
+  expect(classify({'bun.lock':5000})).toEqual({kind:'代码',size:'<100'});
+  expect(classifyTask([])).toEqual({kind:'–',size:'–'});
+  const commits: {mainline:boolean;fileLines:Record<string,number>}[]=[{mainline:false,fileLines:{'README.md':1000}},{mainline:true,fileLines:{'src/core.ts':99}}];
+  expect(classifyTask(commits)).toEqual({kind:'代码',size:'<100'});
+  expect(classifyTask(commits.map(c=>({...c,mainline:false})))).toEqual({kind:'文档',size:'≥1k'});
+  for (const path of ['a.mdx','a.rst','a.txt','nested/docs/a.ts']) expect(classify({[path]:10}).kind).toBe('文档');
+  for (const path of ['test/a.ts','tests/a.ts','__tests__/a.ts','spec/a.ts','a.spec.ts','a_test.go','test_a.py']) expect(classify({[path]:10}).kind).toBe('测试');
+  for (const path of ['components/a.ts','pages/a.ts','views/a.ts','screens/a.ts','styles/a.ts','frontend/a.ts','a.jsx','a.vue','a.svelte','a.css','a.scss','a.html']) expect(classify({[path]:10}).kind).toBe('界面');
+  expect(classify({'docs/a.test.ts':60,'src/core.ts':40}).kind).toBe('文档');
+  expect(classify({'a.test.tsx':80,'src/core.ts':20}).kind).toBe('测试');
+  expect(classify({'a.tsx':40,'src/core.ts':60}).kind).toBe('界面');
+  expect(classify({'test/App.test.tsx':64,'src/ui/App.tsx':36}).kind).toBe('界面');
+  expect(classify({'test/App.test.tsx':79,'src/ui/App.tsx':21}).kind).toBe('界面');
+  expect(classify({'test/App.test.tsx':80,'src/ui/App.tsx':20}).kind).toBe('测试');
+  expect(classify({'test/App.test.tsx':64,'src/core.ts':36}).kind).toBe('代码');
+  expect(classify({'README.md':20,'tests/core.ts':30,'src/ui/App.tsx':20,'src/core.ts':30}).kind).toBe('界面');
+  expect(classify({'README.md':20,'tests/core.ts':30,'src/ui/App.tsx':19,'src/core.ts':31}).kind).toBe('代码');
+  expect(classify({'README.md':55,'tests/core.ts':45}).kind).toBe('文档');
+  expect(classify({'README.md':45,'tests/core.ts':55}).kind).toBe('测试');
+  expect(classify({'docs/a.test.ts':30,'tests/core.ts':30,'src/ui/App.tsx':40}).kind).toBe('界面');
+});
+
+test('numstat keeps per-file additions plus deletions and excludes lockfiles', () => {
+  const r=repo(); r.commit('old\n','base',-2000);
+  writeFileSync(join(r.dir,'file.txt'),'new\nextra\n');
+  writeFileSync(join(r.dir,'bun.lock'),'lock\n'.repeat(1000));
+  r.git(['add','.']); r.git(['commit','-m','work'],10);
+  const sha=r.git(['rev-parse','HEAD']);
+  const repos=new Repos(tmpdir());
+  const commit=repos.of(r.dir)!.commits.get(sha)!;
+  expect(commit.fileLines).toEqual({'file.txt':3});
+  expect(commit.added+commit.deleted).toBe(3);
+  const task=buildTasks([session(r.dir,[0],30,[sha])],repos)[0]!;
+  expect(task.kind).toBe('文档'); expect(task.size).toBe('<100');
+  writeFileSync(join(r.dir,'bun.lock'),'only lock\n');
+  r.git(['add','.']); r.git(['commit','-m','lock only'],40);
+  const lockSha=r.git(['rev-parse','HEAD']);
+  const lock=new Repos(tmpdir()).of(r.dir)!.commits.get(lockSha)!;
+  expect(lock.fileLines).toEqual({}); expect(lock.added+lock.deleted).toBe(0);
+});
+
+test('report kind and size filters and groupings use task classifications', async () => {
+  const {html}=await import('../src/report');
+  const {runInNewContext}=await import('node:vm');
+  const r=repo(); const sha=r.commit('work\n','work',10);
+  const tasks=buildTasks([session(r.dir,[0],30,[sha])],new Repos(tmpdir()));
+  const page=html(tasks,{generatedAt:base,sessions:{claude:1,codex:0},repos:1,ci:false});
+  expect(page).toContain('组合 × 类型'); expect(page).toContain('组合 × 规模');
+  expect(page).toContain('类型 <select id="kind">'); expect(page).toContain('规模 <select id="size">');
+  const elements:Record<string,any>={};
+  const get=(id:string)=>elements[id]??={value:'',checked:id==='commits',innerHTML:'',addEventListener:()=>{}};
+  const context={document:{getElementById:get}};
+  const script=page.match(/<script>([\s\S]*)<\/script>/)![1]!;
+  const vm=await import('node:vm'); const ctx=vm.createContext(context);
+  runInNewContext(script,ctx);
+  expect(get('kind').innerHTML).toStartWith('<option value="">全部</option>');
+  expect(get('size').innerHTML).toStartWith('<option value="">全部</option>');
+  expect(get('tasks').innerHTML).toContain('<th>类型</th><th>规模</th>');
+  expect(get('tasks').innerHTML).toContain('<td>文档</td><td>&lt;100</td>');
+  for (const [group,label] of [['combo+kind','文档'],['combo+size','&lt;100']]) {
+    get('group').value=group; vm.runInContext('render()',ctx);
+    expect(get('summary').innerHTML).toContain(' · '+label);
+  }
+  get('kind').value='界面'; vm.runInContext('render()',ctx);
+  expect(get('tasks').innerHTML).not.toContain('<td>文档</td>');
+  get('kind').value='文档'; get('size').value='≥1k'; vm.runInContext('render()',ctx);
+  expect(get('tasks').innerHTML).not.toContain('<td>文档</td>');
+  get('size').value='<100'; vm.runInContext('render()',ctx);
+  expect(get('tasks').innerHTML).toContain('<td>文档</td>');
+});

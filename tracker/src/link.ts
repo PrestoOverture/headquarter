@@ -1,7 +1,7 @@
 // Link commits to sessions first, then split root sessions into work episodes and attach
 // descendants to the episode in which their parent spawned them. Judge commits per episode.
 
-import { type Commit, originEvidence, sameLanding, type ReworkLine, type Repo, type Repos } from "./git";
+import { type Commit, LOCKFILES, originEvidence, sameLanding, type ReworkLine, type Repo, type Repos } from "./git";
 import { splitEpisodes } from "./episodes";
 import { primaryModel, type Session } from "./types";
 
@@ -19,7 +19,34 @@ const STYLE_WORDS = /\b(lint|biome|eslint|prettier|format|formatting)\b/i;
 export function isFixSubject(subject: string): boolean {
   return !STYLE_WORDS.test(subject) && (FIX_WORDS.test(subject) || FIX_START.test(subject));
 }
-const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|uv\.lock|poetry\.lock)$/;
+const DOC_PATH = /(^|\/)docs\/|\.(md|mdx|rst|txt)$/;
+const TEST_PATH = /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.|_test\.|(^|\/)test_[^/]*\.py$/;
+const UI_PATH = /(^|\/)(ui|components|pages|views|screens|styles|frontend)\/|\.(tsx|jsx|vue|svelte|css|scss|html)$/;
+
+type Classification = { kind: "文档" | "测试" | "界面" | "代码" | "–"; size: "<100" | "100–300" | "300–1k" | "≥1k" | "–" };
+
+/** Classify counted lines from landed commits, falling back to all commits. */
+export function classifyTask(commits: readonly Pick<Commit, "mainline" | "fileLines">[]): Classification {
+  if (!commits.length) return { kind: "–", size: "–" };
+  const landed = commits.filter(c => c.mainline);
+  let total = 0, docs = 0, tests = 0, ui = 0;
+  for (const c of landed.length ? landed : commits) for (const [path, lines] of Object.entries(c.fileLines)) {
+    if (LOCKFILES.test(path)) continue;
+    total += lines;
+    if (DOC_PATH.test(path)) docs += lines;
+    else if (TEST_PATH.test(path)) tests += lines;
+    else if (UI_PATH.test(path)) ui += lines;
+  }
+  const product = total - docs - tests;
+  return {
+    kind: total === 0 ? "代码"
+      : docs / total >= 0.6 ? "文档"
+      : tests / total >= 0.8 ? "测试"
+      : product === 0 ? (docs > tests ? "文档" : "测试")
+      : ui / product >= 0.4 ? "界面" : "代码",
+    size: total < 100 ? "<100" : total < 300 ? "100–300" : total < 1000 ? "300–1k" : "≥1k",
+  };
+}
 
 export type ChildKind = "claude-sub" | "codex" | "codex-sub" | "codex-review";
 
@@ -30,6 +57,7 @@ export type TaskCommit = {
   added: number;
   deleted: number;
   mainline: boolean;
+  fileLines: Record<string, number>;
   /** exact: the session's own `git commit` output names it; time: guessed from repository and time. */
   how: "exact" | "time";
   revertedBy?: string;
@@ -38,7 +66,7 @@ export type TaskCommit = {
   mature: boolean; // the rework window has passed
 };
 
-export type Task = {
+export type Task = Classification & {
   id: string;
   vendor: Session["vendor"];
   combo: string;
@@ -159,6 +187,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
       humanPrompts: tree.reduce((n, s) => n + s.humanPrompts, 0),
       interrupts: tree.reduce((n, s) => n + s.interrupts, 0),
       waitMs: tree.reduce((n, s) => n + s.waitMs, 0),
+      kind: "–", size: "–",
       commits: [],
       landed: false,
       reverted: false,
@@ -219,6 +248,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
         humanPrompts: group.reduce((n,s) => n+s.humanPrompts,0),
         interrupts: group.reduce((n,s) => n+s.interrupts,0), waitMs: group.reduce((n,s) => n+s.waitMs,0), commits,
       };
+      Object.assign(episode, classifyTask(episode.commits));
       judge(episode, repos, now);
       episodes.push(episode);
     });
@@ -288,7 +318,7 @@ function attributeCommits(tasks: Task[], members: Map<Task, Session[]>, repos: R
   for (const [sha, { task, how }] of owner) {
     const c = repoOfSha.get(sha)!.commits.get(sha)!;
     task.commits.push({
-      sha, at: c.at, subject: c.subject, added: c.added, deleted: c.deleted, mainline: c.mainline, how,
+      sha, at: c.at, subject: c.subject, added: c.added, deleted: c.deleted, mainline: c.mainline, fileLines: c.fileLines, how,
       reworkedBy: [], reworkEvidence: [], mature: false,
     });
   }

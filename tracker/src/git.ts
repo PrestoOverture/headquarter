@@ -13,6 +13,7 @@ export type Commit = {
   subject: string;
   body: string;
   files: string[];
+  fileLines: Record<string, number>; // added + deleted, excluding lockfiles and binary files
   added: number;
   deleted: number;
   mainline: boolean; // reachable from the repository's main branch
@@ -33,7 +34,7 @@ export function run(cmd: string[], cwd: string): { code: number; out: string } {
   return { code: p.exitCode ?? -1, out: p.stdout.toString() };
 }
 
-const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|uv\.lock|poetry\.lock)$/;
+export const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|uv\.lock|poetry\.lock)$/;
 
 function loadCommits(top: string): Map<string, Commit> {
   const commits = new Map<string, Commit>();
@@ -46,7 +47,7 @@ function loadCommits(top: string): Map<string, Commit> {
     if (!sha) continue;
     const c: Commit = {
       sha, parents: parents ? parents.split(" ") : [], at: Number(ct) * 1000, author: author ?? "", subject: subject ?? "",
-      body: body ?? "", files: [], added: 0, deleted: 0, mainline: false,
+      body: body ?? "", files: [], fileLines: {}, added: 0, deleted: 0, mainline: false,
     };
     for (const line of stat.split("\n")) {
       const [a, d, ...path] = line.split("\t");
@@ -54,6 +55,7 @@ function loadCommits(top: string): Map<string, Commit> {
       const file = path.join("\t");
       c.files.push(file);
       if (a === "-" || d === "-" || LOCKFILES.test(file)) continue;
+      c.fileLines[file] = (c.fileLines[file] ?? 0) + Number(a) + Number(d);
       c.added += Number(a);
       c.deleted += Number(d);
     }
