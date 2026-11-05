@@ -173,6 +173,11 @@ export function readClaude(root: string): Session[] {
 export const claudePlugin: SourcePlugin = {
   name: "claude",
   defaultPaths: (home) => [join(home, ".claude/projects")],
-  detect: (path) => readClaude(path).length > 0,
+  detect: (path) => {
+    try {
+      return readdirSync(path, { withFileTypes: true }).some(dir => dir.isDirectory() &&
+        readdirSync(join(path, dir.name), { withFileTypes: true }).some(file => file.isFile() && file.name.endsWith(".jsonl")));
+    } catch { return false; }
+  },
   read: readClaude,
 };

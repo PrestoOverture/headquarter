@@ -162,9 +162,17 @@ export function readCodex(root: string): Session[] {
   return out;
 }
 
+function hasRecords(path: string): boolean {
+  try {
+    return readdirSync(path, { withFileTypes: true }).some(entry => entry.isDirectory()
+      ? hasRecords(join(path, entry.name))
+      : entry.isFile() && (entry.name.endsWith(".jsonl") || entry.name.endsWith(".jsonl.zst")));
+  } catch { return false; }
+}
+
 export const codexPlugin: SourcePlugin = {
   name: "codex",
   defaultPaths: (home) => [join(home, ".codex/sessions")],
-  detect: (path) => readCodex(path).length > 0,
+  detect: hasRecords,
   read: readCodex,
 };

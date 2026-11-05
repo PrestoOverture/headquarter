@@ -48,7 +48,7 @@ export function classifyTask(commits: readonly Pick<Commit, "mainline" | "fileLi
   };
 }
 
-export type ChildKind = "claude-sub" | "codex" | "codex-sub" | "codex-review";
+export type ChildKind = "claude-sub" | "codex" | "codex-sub" | "codex-review" | "opencode-sub";
 
 export type TaskCommit = {
   sha: string;
@@ -95,6 +95,7 @@ export type Task = Classification & {
 
 function kindOf(s: Session): ChildKind {
   if (s.vendor === "claude") return "claude-sub";
+  if (s.vendor === "opencode") return "opencode-sub";
   if (s.role === "review") return "codex-review";
   if (s.role === "delegated") return "codex";
   return "codex-sub";

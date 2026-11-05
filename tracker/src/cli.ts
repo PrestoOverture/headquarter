@@ -3,7 +3,7 @@
 // agent combinations delivered work that lasted, at what cost and how much of your attention.
 //
 //   bun src/cli.ts [--out out/report.html] [--since YYYY-MM-DD] [--ci]
-//                  [--claude-dir ~/.claude/projects] [--codex-dir ~/.codex/sessions]
+//                  [--claude-dir ~/.claude/projects] [--codex-dir ~/.codex/sessions] [--opencode-dir ~/.local/share/opencode]
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

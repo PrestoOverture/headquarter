@@ -1,5 +1,6 @@
 import { claudePlugin } from "./claude";
 import { codexPlugin } from "./codex";
+import { opencodePlugin } from "./opencode";
 import type { Session } from "./types";
 
 export interface SourcePlugin {
@@ -9,4 +10,4 @@ export interface SourcePlugin {
   read(path: string): Session[];
 }
 
-export const plugins: SourcePlugin[] = [claudePlugin, codexPlugin];
+export const plugins: SourcePlugin[] = [claudePlugin, codexPlugin, opencodePlugin];
