@@ -1,5 +1,7 @@
 # hq plugin
 
+> Paused 2026-11-05: the project moved to the multi-agent performance tracker (see `docs/tracker.md`). The plugin still works but is not being developed further.
+
 A Claude Code plugin that drives the hq goal flow (goal, work in a separate sandboxed session, gates, report, your approval, merge). The directory is a local marketplace and a plugin in one.
 
 ## Install

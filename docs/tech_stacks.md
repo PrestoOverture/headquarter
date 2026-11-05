@@ -1,5 +1,7 @@
 # 技术栈：指挥所 v1
 
+> **2026-11-05 转向**：项目改做「多 agent 效果追踪器」，产品说明见 [tracker.md](tracker.md)，原因见 [history.md](history.md)。本文件描述的是指挥所 v1（编排器 + 隐藏测试），保留作记录，不再按它开发。
+
 > 拆自 Notion《[指挥所 v1 设计](https://app.notion.com/p/401ea462416881dab00af1d8ce900600)》。本文件讲用什么技术做、系统由哪些部件组成、调度器和沙箱怎么实现、哪些技术问题待核实。产品行为见 [prd.md](prd.md)，计划见 [roadmap.md](roadmap.md)。
 
 ## 选型总览

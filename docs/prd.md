@@ -1,5 +1,7 @@
 # PRD：指挥所 v1
 
+> **2026-11-05 转向**：项目改做「多 agent 效果追踪器」，产品说明见 [tracker.md](tracker.md)，原因见 [history.md](history.md)。本文件描述的是指挥所 v1（编排器 + 隐藏测试），保留作记录，不再按它开发。
+
 > 拆自 Notion《[指挥所 v1 设计](https://app.notion.com/p/401ea462416881dab00af1d8ce900600)》（2026-10-17 · @David，最后编辑 2026-10-22）。本文件讲产品：要解决什么、怎么工作、你在哪里出场、怎么衡量、不做什么。用什么技术、部件怎么实现见 [tech_stacks.md](tech_stacks.md)；先做什么、待定事项和风险见 [roadmap.md](roadmap.md)。
 
 ## 概述
