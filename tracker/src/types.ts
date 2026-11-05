@@ -24,8 +24,6 @@ export type Session = {
   agentRole?: string;
   costUSD?: number; // Claude: the process's own total (subagents included)
   tokens: Tokens;
-  /** Legacy report metric, supplied by the Codex reader only (uncached input + output). */
-  codexTokens?: number;
   humanPrompts: number;
   interrupts: number;
   /** Time the agent sat finished before the person's next prompt, each gap capped at WAIT_CAP_MS. */

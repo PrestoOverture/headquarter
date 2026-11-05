@@ -88,7 +88,6 @@ export function parseCodex(text: string, file: string): Session | null {
           return [k, Math.max(0, tokens[k] - s.tokens[k])];
         })) as Session["tokens"];
         s.tokens = tokens;
-        s.codexTokens = Math.max(0, tokens.input) + tokens.output;
         previousUsage = { input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0 };
       } else if (p.type === "task_started" && p.turn_attribution) {
         attributed = true;

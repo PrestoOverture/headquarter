@@ -108,7 +108,13 @@ test('Codex cumulative tokens use deltas across episodes, duplicate totals do no
   const s=parseCodex(jsonl([{timestamp:at(0),type:'session_meta',payload:{id:'root',cwd:r.dir}},prompt(1),tokens(5,100,20,10),tokens(6,100,20,10),prompt(20),tokens(30,160,30,20)]),'fixture')!;
   s.commitShas=[sha];
   const tasks=buildTasks([s],new Repos(tmpdir()));
-  expect(tasks.map(t=>t.codexTokens)).toEqual([90,60]);
+  expect(tasks.map(t=>t.tokens)).toEqual([
+    {input:80,cacheRead:20,cacheWrite:0,output:10,reasoning:0},
+    {input:50,cacheRead:10,cacheWrite:0,output:10,reasoning:0},
+  ]);
+  for (const key of Object.keys(s.tokens) as (keyof Session['tokens'])[]) {
+    expect(tasks.reduce((n,t)=>n+t.tokens[key],0)).toBe(s.tokens[key]);
+  }
 });
 
 test('headless session without human prompts remains one episode', () => {
@@ -353,7 +359,7 @@ test('report kind and size filters and groupings use task classifications', asyn
   expect(get('size').innerHTML).toStartWith('<option value="">全部</option>');
   expect(get('tasks').innerHTML).toContain('<th>类型</th><th>规模</th>');
   expect(get('tasks').innerHTML).toContain('<td>文档</td><td>&lt;100</td>');
-  for (const [group,label] of [['combo+kind','文档'],['combo+size','&lt;100']]) {
+  for (const [group,label] of [['combo+kind','文档'],['combo+size','&lt;100'],['combo+agent','claude'],['combo+model','?']]) {
     get('group').value=group; vm.runInContext('render()',ctx);
     expect(get('summary').innerHTML).toContain(' · '+label);
   }
@@ -363,4 +369,31 @@ test('report kind and size filters and groupings use task classifications', asyn
   expect(get('tasks').innerHTML).not.toContain('<td>文档</td>');
   get('size').value='<100'; vm.runInContext('render()',ctx);
   expect(get('tasks').innerHTML).toContain('<td>文档</td>');
+});
+
+
+test('aggregate averages each token category over all tasks', async () => {
+  const {aggregate}=await import('../src/aggregate.js');
+  const tasks=[
+    {combo:'test',commits:[],costUSD:0,humanPrompts:0,interrupts:0,waitMs:0,tokens:{input:1200,cacheRead:8000,cacheWrite:600,output:400,reasoning:100}},
+    {combo:'test',commits:[],costUSD:0,humanPrompts:0,interrupts:0,waitMs:0,tokens:{input:0,cacheRead:0,cacheWrite:0,output:0,reasoning:0}},
+  ];
+  const [row]=aggregate(tasks,t=>t.combo);
+  expect(row).toMatchObject({tasks:2,inputPerTask:600,cacheReadPerTask:4000,cacheWritePerTask:300,outputPerTask:200});
+  expect(row).not.toHaveProperty('codexMTokPerTask');
+});
+
+
+test('episode slices preserve all five session token categories', () => {
+  const s=emptySession('test','root','fixture');
+  s.start=0; s.end=40; s.times=[0,10,20,30,40];
+  const first={input:10,cacheRead:20,cacheWrite:30,output:40,reasoning:5};
+  const second={input:50,cacheRead:60,cacheWrite:70,output:80,reasoning:9};
+  s.events=[{at:0,tokens:first},{at:10,humanPrompts:1},{at:30,humanPrompts:1},{at:40,tokens:second}];
+  for (const key of Object.keys(s.tokens) as (keyof Session['tokens'])[]) s.tokens[key]=first[key]+second[key];
+  const slices=splitEpisodes(s,[{at:20}]);
+  expect(slices.map(slice=>slice.tokens)).toEqual([first,second]);
+  for (const key of Object.keys(s.tokens) as (keyof Session['tokens'])[]) {
+    expect(slices.reduce((n,slice)=>n+slice.tokens[key],0)).toBe(s.tokens[key]);
+  }
 });

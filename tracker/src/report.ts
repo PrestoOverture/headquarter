@@ -13,7 +13,7 @@ export type Meta = { generatedAt: number; sessions: Record<string, number>; repo
 function slim(t: Task) {
   return {
     id: t.id, kind: t.kind, size: t.size, combo: t.combo, vendor: t.vendor, headless: t.headless, repo: t.repo ?? null, start: t.start, end: t.end,
-    model: t.model ?? null, kinds: t.kinds, sessions: t.sessions, costUSD: t.costUSD, codexTokens: t.codexTokens,
+    model: t.model ?? null, kinds: t.kinds, sessions: t.sessions, costUSD: t.costUSD, tokens: t.tokens,
     humanPrompts: t.humanPrompts, interrupts: t.interrupts, waitMs: t.waitMs, landed: t.landed, reworked: t.reworked,
     reverted: t.reverted, mature: t.mature, ci: t.ci ?? null,
     commits: t.commits.map((c) => ({
@@ -29,10 +29,10 @@ const num = (x: number | null, d = 1) => (x === null ? "–" : x.toFixed(d));
 
 export function terminalTable(tasks: Task[]): string {
   const rows = aggregate(tasks, (t: Task) => t.combo);
-  const head = ["组合", "任务", "有提交", "合入率", "14天返工(成熟n)", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "Codex Mtok/任务", "插话/任务", "等你 分/任务"];
+  const head = ["组合", "任务", "有提交", "合入率", "14天返工(成熟n)", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "输入 k/任务", "缓存读 k/任务", "缓存写 k/任务", "输出 k/任务", "插话/任务", "等你 分/任务"];
   const body = rows.map((r) => [
-    r.key, String(r.tasks), String(r.withCommits), pct(r.landedRate), `${pct(r.reworkRate)} (${r.mature})`,
-    `${pct(r.ciBreakRate)} (${r.ci})`, String(r.ciInherited), num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.codexMTokPerTask, 2),
+    r.key, String(r.tasks), String(r.withCommits), `${pct(r.landedRate)} (n=${r.withCommits})`, `${pct(r.reworkRate)} (${r.mature})`,
+    `${pct(r.ciBreakRate)} (${r.ci})`, String(r.ciInherited), num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.inputPerTask / 1000, 2), num(r.cacheReadPerTask / 1000, 2), num(r.cacheWritePerTask / 1000, 2), num(r.outputPerTask / 1000, 2),
     num(r.promptsPerTask), num(r.waitMinPerTask),
   ]);
   const width = (s: string) => [...s].reduce((n, ch) => n + (ch.charCodeAt(0) > 0x2e80 ? 2 : 1), 0);
@@ -88,7 +88,8 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
   <label>到 <input type="date" id="to"></label>
   <label>分组 <select id="group">
     <option value="combo">组合</option>
-    <option value="combo+model">组合 × 主模型</option>
+    <option value="combo+agent">组合 × agent</option>
+    <option value="combo+model">组合 × 模型</option>
     <option value="combo+month">组合 × 月份</option>
     <option value="combo+kind">组合 × 类型</option>
     <option value="combo+size">组合 × 规模</option>
@@ -104,7 +105,7 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
   <li>任务 = 一件工作：从人的提示开始，产生提交后遇到下一条人的提示才分成下一件；没有提交的连续提示归在一起。子会话按启动时间归到父会话当时的任务；没有人的提示的后台会话仍算一件。</li>
   <li>合入率 = 有提交的任务里，至少一个提交进了主分支的比例。最近几天的任务可能还没合。</li>
   <li>14 天返工：合入的提交在 14 天内被回滚，或它写的行被别的以 fix/bug/修复 为题的提交改掉或删掉（git blame）。只算已过 14 天的任务（n）。</li>
-  <li>花费只有 Claude 的美元数，按各任务的 assistant token 用量分摊（缺少用量时均分）；Codex 按累计 token 的增量分摊，按百万 token 列出（不含缓存命中的输入）。</li>
+  <li>花费使用记录中的美元数，按各任务的用量分摊（缺少用量时均分）；token 按千个列出，输入不含缓存，输出包含推理。</li>
   <li>插话 = 人发的消息数（含第一条）；等你 = agent 做完到你下一条消息的时间，每段最多算 60 分钟。</li>
   <li>提交对上会话：「精确」是会话自己 git commit 的输出里有这个哈希；其余按仓库和时间猜（相差 10 分钟内）。</li>
 </ul>
@@ -147,6 +148,7 @@ function filtered() {
 
 function keyFn() {
   const g = $("group").value;
+  if (g === "combo+agent") return (t) => t.combo + " · " + t.vendor;
   if (g === "combo+model") return (t) => t.combo + " · " + (t.model || "?");
   if (g === "combo+month") return (t) => t.combo + " · " + day(t.start).slice(0, 7);
   if (g === "combo+kind") return (t) => t.combo + " · " + t.kind;
@@ -159,27 +161,27 @@ function render() {
   const ts = filtered();
   const rows = aggregate(ts, keyFn());
   if ($("group").value === "combo+month") rows.sort((a, b) => a.key.localeCompare(b.key));
-  const head = ["", "任务", "有提交", "合入率", "14天返工", "回滚", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "Codex Mtok/任务", "插话/任务", "打断/任务", "等你 分/任务", "合入行数/任务", "精确对上"];
+  const head = ["", "任务", "有提交", "合入率", "14天返工", "回滚", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "输入 k/任务", "缓存读 k/任务", "缓存写 k/任务", "输出 k/任务", "插话/任务", "打断/任务", "等你 分/任务", "合入行数/任务", "精确对上"];
   $("summary").innerHTML = "<tr>" + head.map((h) => "<th>" + h + "</th>").join("") + "</tr>" + rows.map((r) => "<tr>" + [
-    esc(r.key), r.tasks, r.withCommits, pct(r.landedRate),
+    esc(r.key), r.tasks, r.withCommits, pct(r.landedRate) + ' <span class="n">n=' + r.withCommits + "</span>",
     pct(r.reworkRate) + ' <span class="n">n=' + r.mature + "</span>",
     pct(r.revertRate),
     pct(r.ciBreakRate) + ' <span class="n">n=' + r.ci + "</span>", r.ciInherited,
-    num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.codexMTokPerTask, 2),
+    num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.inputPerTask / 1000, 2), num(r.cacheReadPerTask / 1000, 2), num(r.cacheWritePerTask / 1000, 2), num(r.outputPerTask / 1000, 2),
     num(r.promptsPerTask), num(r.interruptsPerTask, 2), num(r.waitMinPerTask), num(r.linesLandedPerTask, 0), pct(r.exactShare),
   ].map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
 
   $("rework").innerHTML = "<tr>" + ["日期", "组合", "仓库", "提交", "修复提交", "间隔天数", "证据"].map(h => "<th>" + h + "</th>").join("") + "</tr>" + ts.flatMap(t => t.commits.filter(c => c.mainline && c.reworked).flatMap(c => c.reworkEvidence.map(f => "<tr>" + [day(c.at), esc(t.combo), esc(t.repo || "–"), esc(c.sha + " " + c.subject), esc(f.sha + " " + f.subject), num(f.days), f.lines.map(l => esc(l.file + ": " + l.text)).join("<br>")].map(v => '<td class="l">' + v + "</td>").join("") + "</tr>"))).join("");
 
   const recent = ts.slice().sort((a, b) => b.start - a.start).slice(0, 300);
-  const th = ["开始", "组合", "类型", "规模", "仓库", "主模型", "提交（合入）", "结果", "$", "Codex Mtok", "插话", "提交"];
+  const th = ["开始", "组合", "类型", "规模", "仓库", "主模型", "提交（合入）", "结果", "$", "输入 k", "缓存读 k", "缓存写 k", "输出 k", "插话", "提交"];
   $("tasks").innerHTML = "<tr>" + th.map((h) => "<th>" + h + "</th>").join("") + "</tr>" + recent.map((t) => {
     const landedN = t.commits.filter((c) => c.mainline).length;
     const result = !t.commits.length ? "–" : !t.landed ? "未合入" : t.reverted ? '<span class="bad">回滚</span>' : t.reworked ? '<span class="bad">返工</span>' : t.mature ? '<span class="good">存活</span>' : "合入（观察中）";
     const commits = t.commits.slice(0, 4).map((c) => esc(c.sha.slice(0, 7) + " " + c.subject) + (c.how === "time" ? ' <span class="n">(猜)</span>' : "")).join("<br>") + (t.commits.length > 4 ? '<br><span class="n">…共 ' + t.commits.length + " 个</span>" : "");
     return "<tr>" + [
       day(t.start), esc(t.combo), esc(t.kind), esc(t.size), esc(t.repo || "–"), esc(t.model || "–"), t.commits.length + "（" + landedN + "）", result,
-      t.costUSD ? t.costUSD.toFixed(2) : "–", t.codexTokens ? (t.codexTokens / 1e6).toFixed(2) : "–", t.humanPrompts,
+      t.costUSD ? t.costUSD.toFixed(2) : "–", num(t.tokens.input / 1000, 2), num(t.tokens.cacheRead / 1000, 2), num(t.tokens.cacheWrite / 1000, 2), num(t.tokens.output / 1000, 2), t.humanPrompts,
     ].map((c) => "<td>" + c + "</td>").join("") + '<td class="l">' + commits + "</td></tr>";
   }).join("");
 }

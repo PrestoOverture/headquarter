@@ -3,7 +3,7 @@
 
 import { type Commit, LOCKFILES, originEvidence, sameLanding, type ReworkLine, type Repo, type Repos } from "./git";
 import { splitEpisodes } from "./episodes";
-import { primaryModel, type Session } from "./types";
+import { primaryModel, type Session, type Tokens } from "./types";
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -81,7 +81,7 @@ export type Task = Classification & {
   kinds: ChildKind[];
   sessions: number;
   costUSD: number; // Claude sessions (cost-state); Codex records carry no prices
-  codexTokens: number; // uncached input + output
+  tokens: Tokens;
   humanPrompts: number;
   interrupts: number;
   waitMs: number;
@@ -92,6 +92,12 @@ export type Task = Classification & {
   mature: boolean;
   ci?: "pass" | "broke" | "inherited" | "unknown";
 };
+
+function sumTokens(sessions: Session[]): Tokens {
+  const tokens: Tokens = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 };
+  for (const s of sessions) for (const key of Object.keys(tokens) as (keyof Tokens)[]) tokens[key] += s.tokens[key];
+  return tokens;
+}
 
 function kindOf(s: Session): ChildKind {
   if (s.vendor === "claude") return "claude-sub";
@@ -184,7 +190,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
       kinds: [...kinds].sort(),
       sessions: tree.length,
       costUSD: tree.reduce((n, s) => n + (s.costUSD ?? 0), 0),
-      codexTokens: tree.reduce((n, s) => n + (s.codexTokens ?? 0), 0),
+      tokens: sumTokens(tree),
       humanPrompts: tree.reduce((n, s) => n + s.humanPrompts, 0),
       interrupts: tree.reduce((n, s) => n + s.interrupts, 0),
       waitMs: tree.reduce((n, s) => n + s.waitMs, 0),
@@ -245,7 +251,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
       const episode: Task = { ...task, id: slice.id, start: slice.start, end: Math.max(slice.end, ...children.map(s => s.end)),
         combo: comboLabel(root, kinds), kinds: [...kinds].sort(), sessions: group.length, models: Object.keys(models),
         costUSD: group.reduce((n,s) => n+(s.costUSD ?? 0),0),
-        codexTokens: group.reduce((n,s) => n+(s.codexTokens ?? 0),0),
+        tokens: sumTokens(group),
         humanPrompts: group.reduce((n,s) => n+s.humanPrompts,0),
         interrupts: group.reduce((n,s) => n+s.interrupts,0), waitMs: group.reduce((n,s) => n+s.waitMs,0), commits,
       };

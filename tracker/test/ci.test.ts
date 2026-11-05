@@ -54,7 +54,7 @@ test('baseline search stops at twenty ancestors', async()=>{
   expect(t.ci).toBe('unknown');
 });
 test('aggregate and both reports count only pass and broke in the rate',()=>{
-  const tasks=['pass','broke','inherited','unknown'].map(ci=>({ci,combo:'test',commits:[],costUSD:0,codexTokens:0,humanPrompts:0,interrupts:0,waitMs:0} as unknown as Task));
+  const tasks=['pass','broke','inherited','unknown'].map(ci=>({ci,combo:'test',commits:[],costUSD:0,tokens:{input:0,cacheRead:0,cacheWrite:0,output:0,reasoning:0},humanPrompts:0,interrupts:0,waitMs:0} as unknown as Task));
   expect(aggregate(tasks,t=>t.combo)[0]).toMatchObject({ci:2,ciPass:1,ciBroke:1,ciInherited:1,ciBreakRate:0.5});
   for(const output of [terminalTable(tasks),html(tasks,{generatedAt:0,sessions:{claude:0,codex:0},repos:0,ci:true})]){
     expect(output).toContain('CI 新失败 (n)');expect(output).toContain('原本就红');expect(output).not.toContain('CI首过');
