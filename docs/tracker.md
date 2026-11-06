@@ -38,9 +38,20 @@
 - 质量只能用替代指标（存活、返工、CI）；隐藏测试以后作为可选增强。
 - 护城河弱：可选的匿名汇总榜是后续补网络效应的办法。
 
-## 第一步
+## 第一步（T0，已完成）
 
 在作者自己的电脑上做原型：读 Claude Code 和 Codex 的日志（本机约 1.8 GB）加 git，出一张本地报表，看能不能从中看出东西（比如哪种组合返工最少）。
+
+## 给别人用：输入、输出和形态（2026-11-06 讨论）
+
+- **输入**：默认自动发现本机已知位置（`~/.claude/projects`、`~/.codex/sessions`、`~/.local/share/opencode`），列出找到的 agent 让用户勾选；不在默认位置的手动填路径；新的 agent 装一个解析器插件。只读、只在本机。
+- **输出**：一个可视化看板。可选日期、仓库；看用了哪些 agent、每个 agent 用的哪个模型、哪种编排（单干、委派、子 agent、审查；认不出的标「未知」）、结果是什么。每个数字旁标样本量 n。
+- **Result 四项基础指标**（定义见 [t2-interface.md](t2-interface.md#result每个组合的四项基础指标)）：每任务 token（输入、缓存读、缓存写、输出分开列）、落地率、14 天返工率、用户注意力（插话、打断、等待分开列）。可选：CI 新失败率、美元花费。
+- **解析不花 token**：全部是确定性代码（解析 JSON、正则、git blame、gh api），同样的数据永远出同样的数字。将来如果用模型判断「是否修复」「任务类型」，只做可选项、默认关闭，并在报表里标出。
+- **形态（方向已谈，未定）**：要让每个主流 agent 都能接，选 MCP（Claude Code、Codex、OpenCode、Cursor、Gemini CLI 都支持）。但数据不能靠 MCP 采集（agent 不会每步都记得报告），采集仍是读本地日志。设想做成一个 npm 包，三件事：
+  1. 采集：插件读日志。
+  2. 看板：`npx <包名> serve`，本地浏览器打开。
+  3. MCP server：在任何 agent 里查询（例如「这周各组合的返工率」），返回文字摘要和看板链接；宿主支持 MCP Apps 的（Claude 桌面端、ChatGPT、VS Code 等图形宿主）可以直接在对话里显示图表，纯终端宿主（Claude Code CLI、Codex CLI）只显示文字和链接。
 
 ## 本机日志格式（2026-11-05 核对）
 
@@ -48,5 +59,5 @@ T0 开工前看的三家记录。格式都没公开承诺，下面是这台机�
 
 - **Codex**（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`，旧的压成 `.jsonl.zst`）：每行 `{type, payload}`。第一行 `session_meta` 有 `cwd`、`git`（commit、branch、remote）、`originator`（`claude2codex` 是 Claude Code 经 MCP 派来的活）、`source`（`vscode`、`exec`，子 agent 是 `{subagent: {thread_spawn: {parent_thread_id, agent_role}}}` 或 `{subagent: "review"}`）。花费只有 token（`event_msg.token_count` 的累计值），没有美元。人的插话看 `task_started.turn_attribution.turn_trigger`（`composer`、`edit_user_message`），旧会话没有这个字段，只能数用户消息。
 - **Claude Code**（`~/.claude/projects/<目录>/<session>.jsonl`，子 agent 在 `<session>/subagents/agent-*.jsonl`）：每条消息带 `cwd`、`gitBranch`、`entrypoint`（`claude-desktop`、`cli` 是人用；`sdk-cli` 是 `claude -p`）。`cost-state` 记录给出整个进程的 `totalCostUSD`。人说的话：`origin.kind == "human"`，旧记录没有 `origin`，按 entrypoint 和内容排除。派给 Codex 的活：`codex_result` 的返回带 `thread_id`，就是 Codex 会话 id，本机 295 个 `claude2codex` 会话对上 210 个。
-- **OpenCode**（`~/.local/share/opencode/opencode.db`，SQLite）：`session` 表有 `parent_id`、`directory`、`cost`、token。本机只有 14 个会话，T0 不接。
+- **OpenCode**（`~/.local/share/opencode/opencode.db`，SQLite）：`session` 表有 `parent_id`、`directory`、`cost`、token；`message.data` 是 JSON（assistant 带 `modelID`、`tokens`、`cost`、`error`），`part.data` 里有工具调用（bash 的命令和输出）。本机 14 个会话，T2 起接入（只读，只查 session、message、part；库里还有账号表，不碰）。
 - **对提交**：会话里跑 `git commit` 的输出带 `[分支 短哈希]`，能精确对上；对不上的按仓库和时间窗口猜。Codex 的提交很少带署名。

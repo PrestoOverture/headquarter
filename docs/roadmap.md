@@ -9,7 +9,7 @@
 | T0 原型报表 | 在本机读 Claude Code（`~/.claude/projects`）和 Codex（`~/.codex/sessions`）的会话记录，加 git 历史：认出任务、主/子 agent 分工，关联产出的提交（合入、CI、14 天内回滚或返工），记人的介入次数和花费，按组合出一张本地报表 | 用本机现有历史出报表，你看了觉得能看出东西（比如哪种组合返工最少）；看不出就重新想指标 |
 | T0 ✅（2026-11-05） | 见上 | 完成：Codex 写的代码返工率看起来更高（history.md） |
 | T1 返工归因 ✅（2026-11-05） | 把返工判定改准（挪动、缩进、括号行不算），每件返工留证据（哪个修复改了哪几行），报表加「返工明细」；再逐件看 claude → codex 的返工，归类原因（判定误报、活本身难、真缺陷）；任务按类型和规模分组 | 已知误报从结果里消失，返工都带证据，能按同类同规模比；结果写进 history.md |
-| T2 进行中 | 解析器插件化 ✅、OpenCode 接入 ✅、四项基础指标 ✅（分支 t2-plugins）；待定：形态（npm 包 + 本地看板 + MCP）、看板、可选的匿名汇总。接口见 [t2-interface.md](t2-interface.md) | 新 agent 只加一个插件文件；同一数据上插件化前后数字一致 |
+| T2 进行中 | 已完成（2026-11-06，已合入 main）：解析器插件化、OpenCode 接入、四项基础指标、修复标题规则放宽。**下一步**：定形态（npm 包 + 本地看板 + MCP，见 [tracker.md](tracker.md#给别人用输入输出和形态2026-11-06-讨论)）、包名、看板样子，然后做看板；之后再考虑可选的匿名汇总。接口见 [t2-interface.md](t2-interface.md) | 新 agent 只加一个插件文件；同一数据上插件化前后数字一致；看板能按日期、仓库筛，按 agent、模型、编排看四项指标 |
 
 可复用的现有代码：`hq/src/cost.ts`（读 Claude Code stream-json 的花费）、`hq/src/ledger.ts`（只追加事件流）、`hq/src/escape.ts`（14 天内被再次改到的提交）、`hq/src/lines.ts`（变更大小）。T0 开工前先看 OpenCode 的 `opencode.db` 和 Codex 会话格式。
 
