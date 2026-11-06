@@ -22,6 +22,11 @@ export function aggregate(tasks, keyOf) {
     const ci = ciPass + ciBroke;
     const sum = (list, f) => list.reduce((n, t) => n + f(t), 0);
     const cost = sum(ts, (t) => t.costUSD);
+    const median = (field) => {
+      const values = ts.map(t => t.tokens[field]).sort((a, b) => a - b);
+      const mid = Math.floor(values.length / 2);
+      return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+    };
     rows.push({
       key,
       tasks: ts.length,
@@ -40,6 +45,10 @@ export function aggregate(tasks, keyOf) {
       cacheReadPerTask: sum(ts, (t) => t.tokens.cacheRead) / ts.length,
       cacheWritePerTask: sum(ts, (t) => t.tokens.cacheWrite) / ts.length,
       outputPerTask: sum(ts, (t) => t.tokens.output) / ts.length,
+      medianInput: median("input"),
+      medianCacheRead: median("cacheRead"),
+      medianCacheWrite: median("cacheWrite"),
+      medianOutput: median("output"),
       promptsPerTask: sum(ts, (t) => t.humanPrompts) / ts.length,
       interruptsPerTask: sum(ts, (t) => t.interrupts) / ts.length,
       waitMinPerTask: sum(ts, (t) => t.waitMs) / ts.length / 60000,

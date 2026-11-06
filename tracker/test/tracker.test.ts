@@ -228,7 +228,8 @@ test('report renders filtered rework details with escaped evidence', async () =>
   const page=html(tasks,{generatedAt:base,sessions:{claude:1,codex:0},repos:1,ci:false});
   expect(page).toContain('<h2>返工明细</h2>');
   const elements:Record<string,any>={};
-  const get=(id:string)=>elements[id]??=( {value:'',checked:id==='commits',innerHTML:'',addEventListener:()=>{}} );
+  // These commit-only fixtures have no recorded assistant; opt into empty tasks.
+  const get=(id:string)=>elements[id]??=( {value:'',checked:id==='commits'||id==='empty',innerHTML:'',addEventListener:()=>{}} );
   runInNewContext(page.match(/<script>([\s\S]*)<\/script>/)![1]!,{document:{getElementById:get}});
   expect(get('rework').innerHTML).toContain('file.txt: const old = &quot;&lt;tag&gt;&quot;;');
   expect(get('rework').innerHTML).toContain('fix text');
@@ -369,7 +370,8 @@ test('report kind and size filters and groupings use task classifications', asyn
   expect(page).toContain('组合 × 类型'); expect(page).toContain('组合 × 规模');
   expect(page).toContain('类型 <select id="kind">'); expect(page).toContain('规模 <select id="size">');
   const elements:Record<string,any>={};
-  const get=(id:string)=>elements[id]??={value:'',checked:id==='commits',innerHTML:'',addEventListener:()=>{}};
+  // These commit-only fixtures have no recorded assistant; opt into empty tasks.
+  const get=(id:string)=>elements[id]??={value:'',checked:id==='commits'||id==='empty',innerHTML:'',addEventListener:()=>{}};
   const context={document:{getElementById:get}};
   const script=page.match(/<script>([\s\S]*)<\/script>/)![1]!;
   const vm=await import('node:vm'); const ctx=vm.createContext(context);
@@ -415,4 +417,212 @@ test('episode slices preserve all five session token categories', () => {
   for (const key of Object.keys(s.tokens) as (keyof Session['tokens'])[]) {
     expect(slices.reduce((n,slice)=>n+slice.tokens[key],0)).toBe(s.tokens[key]);
   }
+});
+
+// Execute the page's embedded script offline, with the actual control defaults.
+async function dashboard(tasks: import('../src/link').Task[], generatedAt = Date.parse('2026-03-31T00:00:00Z')) {
+  const {html} = await import('../src/report');
+  const {createContext, runInContext} = await import('node:vm');
+  const page = html(tasks, {generatedAt, sessions:{claude:tasks.length}, repos:1, ci:false});
+  const elements: Record<string, any> = {};
+  const get = (id: string) => elements[id] ??= {
+    value: ({group:'combo', bucket:'4week', 'token-metric':'output'} as Record<string,string>)[id] || '',
+    checked: id === 'commits' || id === 'markers', innerHTML:'', textContent:'',
+    addEventListener(_event: string, handler: () => void) { this.change = handler; },
+  };
+  const ctx = createContext({document:{getElementById:get}});
+  runInContext(page.match(/<script>([\s\S]*)<\/script>/)![1]!, ctx);
+  return {page, get, read:(expression:string) => runInContext(expression, ctx), change:(id:string, value:string|boolean) => {
+    get(id)[typeof value === 'boolean' ? 'checked' : 'value'] = value;
+    get(id).change();
+  }};
+}
+
+function dashboardTask(overrides: Partial<import('../src/link').Task> = {}): import('../src/link').Task {
+  return {
+    id:'task', vendor:'claude', combo:'claude solo', headless:false, empty:false, repo:'repo-a', cwd:'/fixture',
+    start:base, end:base+10000, model:'root-model', models:['root-model','child-model'], kinds:[], sessions:1,
+    costUSD:2, tokens:{input:100,cacheRead:200,cacheWrite:300,output:400,reasoning:10},
+    humanPrompts:2, interrupts:1, waitMs:60000, kind:'代码', size:'<100', landed:true, reworked:true, reverted:false, mature:true,
+    commits:[{sha:'abc1234',at:base,subject:'work',added:1,deleted:0,fileLines:{'src/a.ts':1},mainline:true,how:'exact',reworkedBy:[],reworkEvidence:[],mature:true}],
+    ...overrides,
+  };
+}
+
+test('task with only a human prompt is empty; normal assistant evidence is not', () => {
+  const row = (type:string, extra = {}) => ({timestamp:at(type === 'user' ? 0 : 1), type, sessionId:'root', cwd:'/no-such-dashboard-repo', entrypoint:'cli', message:{content:type === 'user' ? 'work' : 'done', ...extra}});
+  const promptOnly = parseClaude(jsonl([row('user')]), 'fixture')!;
+  const normal = parseClaude(jsonl([row('user'), row('assistant', {model:'model-a', usage:{input_tokens:10,output_tokens:5}})]), 'fixture')!;
+  expect(buildTasks([promptOnly],new Repos(tmpdir()))[0]).toMatchObject({empty:true,humanPrompts:1});
+  expect(buildTasks([normal],new Repos(tmpdir()))[0]!.empty).toBe(false);
+  const modelOnly = parseClaude(jsonl([row('user'), row('assistant',{model:'model-a'})]),'fixture')!;
+  expect(buildTasks([modelOnly],new Repos(tmpdir()))[0]!.empty).toBe(false);
+  for (const field of ['input','cacheRead','cacheWrite','output','reasoning'] as const) {
+    const s = structuredClone(promptOnly); s.tokens[field] = 1;
+    s.events.push({at:base+1000,tokens:{...s.tokens}});
+    expect(buildTasks([s],new Repos(tmpdir()))[0]!.empty).toBe(false);
+  }
+  const child = structuredClone(normal); child.id='child'; child.parent=promptOnly.id;
+  expect(buildTasks([promptOnly,child],new Repos(tmpdir()))[0]).toMatchObject({empty:false,sessions:2});
+});
+
+test('aggregate medians use per-task categories, zeros, and even / odd sample sizes', async () => {
+  const {aggregate} = await import('../src/aggregate.js');
+  const tasks = [90,0,10,20].map(n => dashboardTask({tokens:{input:n,cacheRead:n*2,cacheWrite:n*3,output:n*4,reasoning:999}}));
+  expect(aggregate(tasks,t=>t.combo)[0]).toMatchObject({tasks:4,medianInput:15,medianCacheRead:30,medianCacheWrite:45,medianOutput:60,
+    inputPerTask:30,cacheReadPerTask:60,cacheWritePerTask:90,outputPerTask:120});
+  expect(aggregate(tasks.slice(0,3),t=>t.combo)[0]).toMatchObject({medianInput:10,medianCacheRead:20,medianCacheWrite:30,medianOutput:40});
+  expect(aggregate([tasks[0]!],t=>t.combo)[0]!.medianInput).toBe(90);
+  expect(aggregate([],()=> 'all')).toEqual([]);
+});
+
+test('html stays self-contained, including URL strings and hostile recorded text', async () => {
+  const {html} = await import('../src/report');
+  for (const tasks of [[], [dashboardTask({model:'https://example.test/<script src="bad">', repo:'http://example.test/</script><link href="bad">'})]]) {
+    const page = html(tasks,{generatedAt:base,sessions:{claude:1},repos:1,ci:false});
+    expect(page).not.toMatch(/<script\s+src|<link|http:\/\/|https:\/\//i);
+    expect(page.match(/<script>/g)).toHaveLength(1);
+    expect(page.match(/<\/script>/g)).toHaveLength(1);
+  }
+  const view = await dashboard([dashboardTask({model:'https://example.test/model'})]);
+  expect(view.read('DATA.tasks[0].model')).toBe('https://example.test/model');
+});
+
+test('dashboard cards, medians, optional columns, and all filters share one task set', async () => {
+  const view = await dashboard([dashboardTask(),
+    dashboardTask({id:'other',vendor:'codex',combo:'codex solo',repo:'repo-b',model:'other-root',start:base+7*86400000,landed:false,mature:false,reworked:false,humanPrompts:4}),
+    dashboardTask({id:'empty',empty:true,commits:[],landed:false,mature:false}),
+    dashboardTask({id:'headless',headless:true}),
+    dashboardTask({id:'norepo',repo:undefined,commits:[],landed:false,mature:false}),
+  ]);
+  expect(view.page).toContain('含空任务（无回复）');
+  expect(view.get('empty-count').textContent).toBe('（1）');
+  expect(view.get('cards').innerHTML.match(/class="card"/g)).toHaveLength(4);
+  for (const value of ['2','2 / 1','100%','3.0']) expect(view.get('cards').innerHTML).toContain('<strong>'+value+'</strong>');
+  expect(view.get('cards').innerHTML).toContain('1/1 (n=1)');
+  expect(view.get('summary').innerHTML).toContain('样本少');
+  expect(view.get('summary').innerHTML).toContain('0/1 (n=1)');
+  expect(view.get('summary').innerHTML).toContain('width:100%');
+  expect(view.get('summary').innerHTML).toContain('<td>0.10</td><td>0.20</td><td>0.30</td><td>0.40</td>');
+  expect(view.get('summary').innerHTML).not.toMatch(/\$\/任务|CI 新失败/);
+  view.change('more',true);
+  expect(view.get('summary').innerHTML).toContain('$/任务');
+  expect(view.get('summary').innerHTML).toContain('CI 新失败');
+  view.change('group','model');
+  expect(view.get('summary').innerHTML).toContain('<td>root-model</td>');
+  expect(view.get('summary').innerHTML).not.toContain('<td>child-model</td>');
+  view.change('group','agent');
+  expect(view.get('summary').innerHTML).toContain('<td>claude</td>');
+  for (const [id,value] of [['agent','codex'],['repo','repo-b'],['from','2026-01-08'],['to','2026-01-01']] as const) {
+    view.change(id,value);
+    expect(view.read('filtered().length')).toBe(1);
+    expect(view.get('trend-tokens').innerHTML.match(/data-series="tokens"/g)).toHaveLength(1);
+    view.change(id,'');
+  }
+  view.change('commits',false); expect(view.read('filtered().length')).toBe(2);
+  view.change('empty',true); expect(view.read('filtered().length')).toBe(3);
+  view.change('headless',true); expect(view.read('filtered().length')).toBe(4);
+  view.change('norepo',true); expect(view.read('filtered().length')).toBe(5);
+  view.change('kind','界面'); expect(view.read('filtered().length')).toBe(0);
+  expect(view.get('trend-rework').innerHTML).toContain('n=0');
+  expect(view.get('cards').innerHTML).not.toMatch(/NaN|Infinity/);
+  view.change('kind',''); view.change('size','≥1k'); expect(view.read('filtered().length')).toBe(0);
+});
+
+test('SVG trends use vendor buckets, mature n gates, cache-inclusive medians, and model switches', async () => {
+  const DAY=86400000, monday=Date.parse('2026-01-05T00:00:00Z');
+  const tasks = [100,200,900].map((output,i) => dashboardTask({start:monday,model:i===2?'new-model':'old-model',reworked:i===0,tokens:{input:output,cacheRead:output*2,cacheWrite:output*3,output,reasoning:output}}));
+  tasks.push(...[0,1].map(i=>dashboardTask({vendor:'codex',model:'same-name',start:monday,reworked:i===0})));
+  tasks.push(dashboardTask({start:monday+7*DAY,model:'old-model',mature:false}));
+  tasks.push(dashboardTask({start:monday+14*DAY,model:'new-model',reworked:false}));
+  tasks.push(dashboardTask({start:monday+35*DAY,model:'latest-model',mature:false}));
+  const view=await dashboard(tasks,monday+40*DAY);
+  expect(view.get('bucket').value).toBe('4week');
+  expect(view.get('trend-rework').innerHTML).toContain('返工 1/3（成熟 n）');
+  expect(view.get('trend-rework').innerHTML.match(/data-series="rework"/g)).toHaveLength(1);
+  view.change('bucket','week');
+  const a=view.get('trend-rework').innerHTML, b=view.get('trend-tokens').innerHTML;
+  expect(a).toContain('<svg'); expect(a).toContain('stroke-dasharray="5 4"');
+  expect(a).toContain('未满 14 天'); expect(a).toContain('返工 1/3（成熟 n）');
+  expect(a).toContain('返工 1/2（成熟 n）'); // n is retained in bars even if no point is drawn.
+  expect(a.match(/data-series="rework"/g)).toHaveLength(1);
+  expect(a.match(/data-series="mature"/g)).toHaveLength(3);
+  expect(b).toContain('claude · 2026-01-05 · 中位数 200 · n=3');
+  expect(b).not.toContain('data-model-marker="codex:');
+  expect(a.match(/data-model-marker=/g)).toHaveLength(2);
+  expect(b.match(/data-model-marker=/g)).toHaveLength(2);
+  expect(a).toContain('data-model-marker="claude: old-model → new-model"');
+  view.change('token-metric','input');
+  expect(view.get('trend-tokens').innerHTML).toContain('claude · 2026-01-05 · 中位数 1200 · n=3');
+  view.change('markers',false);
+  expect(view.get('trend-rework').innerHTML).not.toContain('data-model-marker');
+  expect(view.get('trend-tokens').innerHTML).not.toContain('data-model-marker');
+  view.change('markers',true); view.change('from','2026-01-19');
+  expect(view.get('trend-rework').innerHTML).not.toContain('data-model-marker="claude: old-model');
+  expect(view.get('trend-rework').innerHTML).toContain('data-model-marker="claude: new-model → latest-model"');
+  view.change('from',''); view.change('agent','codex');
+  expect(view.get('trend-tokens').innerHTML).toContain('codex');
+  expect(view.get('trend-tokens').innerHTML).not.toContain('claude');
+  const zeros=await dashboard([dashboardTask({tokens:{input:0,cacheRead:0,cacheWrite:0,output:0,reasoning:0}})]);
+  expect(zeros.get('trend-tokens').innerHTML).not.toMatch(/NaN|Infinity|data-series="tokens"/);
+});
+
+test('dominant root-model switches skip first and empty buckets, minor models, and follow filters', async () => {
+  const monday=Date.parse('2026-01-05T00:00:00Z'), week=7*86400000;
+  const tasks: import('../src/link').Task[]=[];
+  const add=(bucket:number,model:string,n:number,vendor='claude',repo='repo-a') => {
+    for(let i=0;i<n;i++) tasks.push(dashboardTask({start:monday+bucket*week,model,vendor,repo,models:['ignored-child-model']}));
+  };
+  add(0,'A',3); add(0,'minor',1);
+  add(1,'A',3); add(1,'B',1);
+  // Bucket 2 is empty. Dominant buckets A,A,B produce just A → B.
+  add(3,'B',3); add(3,'minor',1);
+  add(0,'C',2,'codex'); add(3,'D',2,'codex');
+  const view=await dashboard(tasks.reverse());
+  view.change('bucket','week');
+  expect(view.page).toContain('checked> 主模型切换');
+  expect(view.read('modelSwitches(filtered())')).toEqual([
+    {vendor:'claude',at:monday+3*week,old:'A',model:'B'},
+    {vendor:'codex',at:monday+3*week,old:'C',model:'D'},
+  ]);
+  for(const id of ['trend-rework','trend-tokens']) {
+    const svg=view.get(id).innerHTML;
+    expect(svg.match(/data-model-marker=/g)).toHaveLength(2);
+    expect(svg).toContain('data-model-marker="claude: A → B"');
+    expect(svg).toContain('data-model-marker="codex: C → D"');
+    const ys=[...svg.matchAll(/data-model-marker="[^"]+"[\s\S]*?<text x="[^"]+" y="([^"]+)"/g)].map(m=>Number(m[1]));
+    expect(new Set(ys).size).toBe(2);
+  }
+  view.change('agent','claude');
+  expect(view.read('modelSwitches(filtered()).length')).toBe(1);
+  view.change('from','2026-01-26');
+  expect(view.read('modelSwitches(filtered())')).toEqual([]);
+  expect(view.get('trend-rework').innerHTML).not.toContain('data-model-marker');
+  // A repository filter changes bucket dominance, rather than preserving a global switch.
+  const byRepo=await dashboard([
+    ...[0,1].flatMap(bucket=>Array.from({length:2},()=>dashboardTask({start:monday+bucket*week,model:'A',repo:'repo-a'}))),
+    dashboardTask({start:monday,model:'A',repo:'repo-b'}),
+    ...Array.from({length:3},()=>dashboardTask({start:monday+week,model:'B',repo:'repo-b'})),
+  ]);
+  byRepo.change('bucket','week');
+  expect(byRepo.read('modelSwitches(filtered())')).toEqual([{vendor:'claude',at:monday+week,old:'A',model:'B'}]);
+  byRepo.change('repo','repo-a');
+  expect(byRepo.read('modelSwitches(filtered())')).toEqual([]);
+  // Ties retain the previous dominant model, independent of task order.
+  const tie=await dashboard([dashboardTask({start:monday,model:'B'}),dashboardTask({start:monday+week,model:'A'}),dashboardTask({start:monday+week,model:'B'})]);
+  tie.change('bucket','week');
+  expect(tie.read('modelSwitches(filtered())')).toEqual([]);
+});
+
+
+test('sample warnings stop at n=20 and token trend positions use a logarithmic axis', async () => {
+  for (const n of [19,20]) {
+    const view=await dashboard(Array.from({length:n},()=>dashboardTask()));
+    expect(view.get('summary').innerHTML.includes('样本少')).toBe(n<20);
+  }
+  const view=await dashboard([100,1000,10000].map((output,i)=>dashboardTask({start:base+i*7*86400000,tokens:{input:0,cacheRead:0,cacheWrite:0,output,reasoning:0}})));
+  view.change('bucket','week');
+  const ys=[...view.get('trend-tokens').innerHTML.matchAll(/data-series="tokens" cx="[^"]+" cy="([^"]+)"/g)].map(m=>Number(m[1]));
+  expect(ys).toHaveLength(3);
+  expect(ys[0]!-ys[1]!).toBeCloseTo(ys[1]!-ys[2]!);
 });

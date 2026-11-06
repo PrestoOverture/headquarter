@@ -3,5 +3,6 @@ export type Row = {
   reworkRate: number | null; revertRate: number | null; ci: number; ciPass: number; ciBroke: number; ciInherited: number; ciBreakRate: number | null; costPerTask: number;
   costPerLanded: number | null; inputPerTask: number; cacheReadPerTask: number; cacheWritePerTask: number; outputPerTask: number; promptsPerTask: number; interruptsPerTask: number;
   waitMinPerTask: number; linesLandedPerTask: number | null; exactShare: number | null;
+  medianInput: number; medianCacheRead: number; medianCacheWrite: number; medianOutput: number;
 };
 export function aggregate<T>(tasks: T[], keyOf: (t: T) => string): Row[];

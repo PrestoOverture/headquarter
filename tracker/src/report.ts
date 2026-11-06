@@ -12,7 +12,7 @@ export type Meta = { generatedAt: number; sessions: Record<string, number>; repo
 /** What the page needs of a task (no file paths beyond the working directory, no prompt text). */
 function slim(t: Task) {
   return {
-    id: t.id, kind: t.kind, size: t.size, combo: t.combo, vendor: t.vendor, headless: t.headless, repo: t.repo ?? null, start: t.start, end: t.end,
+    id: t.id, kind: t.kind, size: t.size, combo: t.combo, vendor: t.vendor, headless: t.headless, empty: t.empty, repo: t.repo ?? null, start: t.start, end: t.end,
     model: t.model ?? null, kinds: t.kinds, sessions: t.sessions, costUSD: t.costUSD, tokens: t.tokens,
     humanPrompts: t.humanPrompts, interrupts: t.interrupts, waitMs: t.waitMs, landed: t.landed, reworked: t.reworked,
     reverted: t.reverted, mature: t.mature, ci: t.ci ?? null,
@@ -42,7 +42,8 @@ export function terminalTable(tasks: Task[]): string {
 }
 
 export function html(tasks: Task[], meta: Meta): string {
-  const data = JSON.stringify({ meta, tasks: tasks.map(slim) }).replace(/</g, "\\u003c");
+  // Escape recorded URLs in the JSON without changing their decoded display text.
+  const data = JSON.stringify({ meta, tasks: tasks.map(slim) }).replace(/</g, "\\u003c").replace(/https?:/gi, s => s.slice(0, -1) + "\\u003a");
   return `<!doctype html>
 <html lang="zh">
 <head>
@@ -73,6 +74,17 @@ tr:last-child td { border-bottom: 0; }
 details { margin-top: 24px; }
 summary { cursor: pointer; font-weight: 600; }
 ul.notes { color: var(--muted); padding-left: 20px; }
+.cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:20px; }
+.card, .chart { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+.card strong { display:block; font-size:26px; font-variant-numeric:tabular-nums; }
+.card .label { color:var(--muted); }
+.rate-bar { display:block; height:3px; background:var(--line); margin-top:4px; }
+.rate-bar i { display:block; height:100%; background:var(--accent); }
+.chart { margin-top:12px; overflow-x:auto; }
+.chart svg { display:block; width:100%; min-width:680px; color:var(--muted); font:12px sans-serif; }
+.legend { display:flex; flex-wrap:wrap; gap:16px; margin:8px 0; }
+.legend span { border-left:10px solid; padding-left:6px; }
+@media (max-width:700px) { .cards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 td.l { text-align:left; white-space: normal; min-width: 240px; }
 </style>
 </head>
@@ -82,12 +94,15 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
 <p class="sub" id="meta"></p>
 <div class="filters">
   <label>仓库 <select id="repo"></select></label>
+  <label>agent <select id="agent"></select></label>
   <label>类型 <select id="kind"></select></label>
   <label>规模 <select id="size"></select></label>
   <label>从 <input type="date" id="from"></label>
   <label>到 <input type="date" id="to"></label>
   <label>分组 <select id="group">
     <option value="combo">组合</option>
+    <option value="model">模型</option>
+    <option value="agent">agent</option>
     <option value="combo+agent">组合 × agent</option>
     <option value="combo+model">组合 × 模型</option>
     <option value="combo+month">组合 × 月份</option>
@@ -98,17 +113,31 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
   <label><input type="checkbox" id="commits" checked> 只看有提交的任务</label>
   <label><input type="checkbox" id="headless"> 含无人值守（claude -p、codex exec）</label>
   <label><input type="checkbox" id="norepo"> 含不在仓库里的会话</label>
+  <label><input type="checkbox" id="empty"> 含空任务（无回复）<span id="empty-count"></span></label>
 </div>
-<h2>按组合</h2>
+<div class="cards" id="cards"></div>
+<h2>分组汇总</h2>
+<label><input type="checkbox" id="more"> 更多列（$ / CI 等）</label>
 <div class="scroll"><table id="summary"></table></div>
 <ul class="notes">
   <li>任务 = 一件工作：从人的提示开始，产生提交后遇到下一条人的提示才分成下一件；没有提交的连续提示归在一起。子会话按启动时间归到父会话当时的任务；没有人的提示的后台会话仍算一件。</li>
   <li>合入率 = 有提交的任务里，至少一个提交进了主分支的比例。最近几天的任务可能还没合。</li>
   <li>14 天返工：合入的提交在 14 天内被回滚，或它写的行被别的以 fix/bug/修复 为题的提交改掉或删掉（git blame）。只算已过 14 天的任务（n）。</li>
+  <li>汇总 token 是每任务用量的中位数（MEDIAN）；注意力是每任务均值。趋势按任务开始日期分桶（UTC，周一开始），主模型切换按当前筛选中各 agent 每桶任务数最多的根模型计算。</li>
   <li>花费使用记录中的美元数，按各任务的用量分摊（缺少用量时均分）；token 按千个列出，输入不含缓存，输出包含推理。</li>
   <li>插话 = 人发的消息数（含第一条）；等你 = agent 做完到你下一条消息的时间，每段最多算 60 分钟。</li>
   <li>提交对上会话：「精确」是会话自己 git commit 的输出里有这个哈希；其余按仓库和时间猜（相差 10 分钟内）。</li>
 </ul>
+<h2>趋势</h2>
+<div class="filters">
+  <label>时间桶 <select id="bucket"><option value="4week" selected>4 周</option><option value="week">周</option></select></label>
+  <label>token <select id="token-metric"><option value="output">输出</option><option value="input">总输入（含缓存读 / 写）</option></select></label>
+  <label><input type="checkbox" id="markers" checked> 主模型切换</label>
+</div>
+<div id="legend" class="legend"></div>
+<p class="n">返工点仅显示成熟 n ≥ 3；柱为成熟 n（右轴）。token 为每任务中位数，对数轴不绘制 0。虚线标记主模型相对前一个非空桶的切换；首桶不标记。并列时保留原主模型，否则按模型名排序；未知模型记为 ?。</p>
+<div class="chart" id="trend-rework"></div>
+<div class="chart" id="trend-tokens"></div>
 <details open>
 <summary>任务明细（最近 300 个）</summary>
 <div class="scroll" style="margin-top:8px"><table id="tasks"></table></div>
@@ -127,6 +156,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 
 const m = DATA.meta;
 $("meta").textContent = "生成于 " + new Date(m.generatedAt).toLocaleString() + " · " + Object.entries(m.sessions).map(([name, count]) => name + " 会话 " + count).join(" · ") + " · 仓库 " + m.repos + (m.ci ? " · 含 CI" : " · 未查 CI（--ci）");
+$("empty-count").textContent = "（" + DATA.tasks.filter(t => t.empty).length + "）";
+const agents = [...new Set(DATA.tasks.map(t => t.vendor))].sort();
+$("agent").innerHTML = '<option value="">全部</option>' + agents.map(v => '<option>' + esc(v) + '</option>').join("");
 const repos = [...new Set(DATA.tasks.map((t) => t.repo).filter(Boolean))].sort();
 $("repo").innerHTML = '<option value="">全部</option>' + repos.map((r) => '<option>' + esc(r) + '</option>').join("");
 
@@ -138,6 +170,8 @@ function filtered() {
   const repo = $("repo").value, from = $("from").value, to = $("to").value;
   return DATA.tasks.filter((t) =>
     (!repo || t.repo === repo) &&
+    (!$("agent").value || t.vendor === $("agent").value) &&
+    ($("empty").checked || !t.empty) &&
     (!$("kind").value || t.kind === $("kind").value) &&
     (!$("size").value || t.size === $("size").value) &&
     (!from || day(t.start) >= from) && (!to || day(t.start) <= to) &&
@@ -148,6 +182,8 @@ function filtered() {
 
 function keyFn() {
   const g = $("group").value;
+  if (g === "model") return (t) => t.model || "?";
+  if (g === "agent") return (t) => t.vendor;
   if (g === "combo+agent") return (t) => t.combo + " · " + t.vendor;
   if (g === "combo+model") return (t) => t.combo + " · " + (t.model || "?");
   if (g === "combo+month") return (t) => t.combo + " · " + day(t.start).slice(0, 7);
@@ -157,19 +193,166 @@ function keyFn() {
   return (t) => t.combo;
 }
 
+const DAY = 86400000;
+// Fixed UTC Monday anchor keeps bucket boundaries stable when filters change.
+const ANCHOR = Date.UTC(1970, 0, 5);
+function bucketAt(at) {
+  const span = ($("bucket").value === "week" ? 7 : 28) * DAY;
+  return ANCHOR + Math.floor((at - ANCHOR) / span) * span;
+}
+const colors = ["#387bcb", "#d07724", "#8c59b5", "#28917d", "#c45169", "#7c8234"];
+const color = vendor => colors[agents.indexOf(vendor) % colors.length];
+function modelSwitches(tasks) {
+  const vendors = new Map();
+  for (const t of tasks) {
+    if (!vendors.has(t.vendor)) vendors.set(t.vendor, new Map());
+    const buckets = vendors.get(t.vendor), at = bucketAt(t.start);
+    if (!buckets.has(at)) buckets.set(at, new Map());
+    const counts = buckets.get(at), model = t.model || "?";
+    counts.set(model, (counts.get(model) || 0) + 1);
+  }
+  const switches = [];
+  for (const [vendor, buckets] of vendors) {
+    let previous = null;
+    for (const [at, counts] of [...buckets].sort((a,b) => a[0]-b[0])) {
+      const ranked = [...counts].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
+      const model = counts.get(previous) === ranked[0][1] ? previous : ranked[0][0];
+      if (previous !== null && model !== previous) switches.push({vendor, at, old:previous, model});
+      previous = model;
+    }
+  }
+  return switches.sort((a,b) => a.at-b.at || a.vendor.localeCompare(b.vendor));
+}
+
+function renderTrends(ts) {
+  const vendors = [...new Set(ts.map(t => t.vendor))].sort();
+  $("legend").innerHTML = vendors.map(v => '<span style="border-color:' + color(v) + '">' + esc(v) + '</span>').join("");
+  if (!ts.length) {
+    $("trend-rework").innerHTML = $("trend-tokens").innerHTML = '<p class="n">当前筛选无任务（n=0）</p>';
+    return;
+  }
+  const span = ($("bucket").value === "week" ? 7 : 28) * DAY;
+  const starts = ts.map(t => bucketAt(t.start));
+  const first = Math.min(...starts), last = Math.max(...starts);
+  const buckets = [];
+  for (let at = first; at <= last; at += span) buckets.push(at);
+  const grouped = new Map();
+  for (const t of ts) {
+    const key = JSON.stringify([t.vendor, bucketAt(t.start)]);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(t);
+  }
+  const input = $("token-metric").value === "input";
+  const series = vendors.map(vendor => ({vendor, points:buckets.map(at => {
+    const tasks = grouped.get(JSON.stringify([vendor, at])) || [];
+    const mature = tasks.filter(t => t.landed && t.mature);
+    const k = mature.filter(t => t.reworked).length;
+    const values = tasks.map(t => input ? t.tokens.input + t.tokens.cacheRead + t.tokens.cacheWrite : t.tokens.output).sort((a,b) => a-b);
+    const mid = Math.floor(values.length / 2);
+    const median = !values.length ? null : values.length % 2 ? values[mid] : (values[mid-1] + values[mid]) / 2;
+    return {at, n:tasks.length, mature:mature.length, k, rework:mature.length >= 3 ? k / mature.length : null, median};
+  })}));
+  const left = 72, right = 840, width = right-left, height = 236;
+  const step = width / buckets.length;
+  const x = at => left + ((at-first) / span + 0.5) * step;
+  // Put marker labels in non-overlapping lanes above the plot, on both charts.
+  const lanes = [];
+  const markers = $("markers").checked ? modelSwitches(ts).map(p => {
+      const text = p.vendor + ": " + p.old + " → " + p.model;
+      const short = text.length > 80 ? text.slice(0,77) + "…" : text;
+      const labelWidth = [...short].reduce((n,c) => n + (c.charCodeAt(0) > 0x2e80 ? 12 : 7), 0);
+      const labelX = Math.max(left, Math.min(x(bucketAt(p.at))+4, right-labelWidth));
+      let lane = lanes.findIndex(end => end+8 < labelX);
+      if (lane < 0) lane = lanes.length;
+      lanes[lane] = labelX+labelWidth;
+      return {...p, text, short, labelX, labelY:42+lane*20};
+    }) : [];
+  const top = 64+lanes.length*20, bottom = top+height;
+  const line = (x1,y1,x2,y2,attrs='') => '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" ' + attrs + '/>';
+  const label = (x,y,text,attrs='') => '<text x="' + x + '" y="' + y + '" fill="currentColor" ' + attrs + '>' + esc(text) + '</text>';
+  const positives = series.flatMap(s => s.points.map(p => p.median)).filter(v => v > 0);
+  const low = positives.length ? Math.floor(Math.log10(Math.min(...positives))) : 0;
+  const high = Math.max(low+1, positives.length ? Math.ceil(Math.log10(Math.max(...positives))) : 1);
+  const maxN = Math.max(1, ...series.flatMap(s => s.points.map(p => p.mature)));
+  const yToken = v => bottom - (Math.log10(v)-low) / (high-low) * height;
+  for (const type of ["rework", "tokens"]) {
+    const title = type === "rework" ? "A · 14 天返工率 / 成熟 n" : "B · 每任务" + (input ? "总输入（含缓存）" : "输出") + " token 中位数（对数轴）";
+    let svg = '<svg viewBox="0 0 920 ' + (bottom+60) + '" role="img" aria-label="' + esc(title) + '"><title>' + esc(title) + '</title>';
+    svg += label(left, 20, title);
+    const immature = buckets.filter(at => at >= m.generatedAt - 14*DAY && at <= m.generatedAt);
+    if (type === "rework") for (const at of immature) {
+      svg += '<rect x="' + (x(at)-step/2) + '" y="' + top + '" width="' + step + '" height="' + height + '" fill="var(--warn)" opacity="0.1"/>';
+    }
+    if (type === "rework" && immature.length) svg += label(x(immature[0])-step/2+4, top+14, "未满 14 天");
+    const ticks = type === "rework" ? [0,0.25,0.5,0.75,1] : Array.from({length:high-low+1}, (_,i) => 10**(low+i));
+    for (const tick of ticks) {
+      const y = type === "rework" ? bottom-tick*height : yToken(tick);
+      svg += line(left,y,right,y,'stroke="var(--line)"');
+      svg += label(left-8,y+4,type === "rework" ? pct(tick) : tick.toLocaleString(), 'text-anchor="end"');
+      if (type === "rework") svg += label(right+8,y+4,String(Math.round(tick*maxN)));
+    }
+    const every = Math.max(1, Math.ceil(buckets.length / 8));
+    buckets.forEach((at,i) => { if (i % every === 0) svg += label(x(at), bottom+24, day(at), 'text-anchor="middle"'); });
+    for (const [vi,s] of series.entries()) {
+      let previous = null;
+      for (const p of s.points) {
+        const title = esc(s.vendor + " · " + day(p.at) + (type === "rework" ? " · 返工 " + p.k + "/" + p.mature + "（成熟 n）" : " · 中位数 " + (p.median === null ? "–" : p.median) + " · n=" + p.n + " · 返工 " + p.k + "/" + p.mature));
+        if (type === "rework" && p.mature) {
+          const barWidth = Math.max(0.2, Math.min(16, step*0.65/vendors.length));
+          const h = p.mature/maxN*height;
+          svg += '<rect data-series="mature" x="' + (x(p.at)+(vi-vendors.length/2)*barWidth) + '" y="' + (bottom-h) + '" width="' + barWidth + '" height="' + h + '" fill="' + color(s.vendor) + '" opacity="0.18"><title>' + title + '</title></rect>';
+        }
+        const value = type === "rework" ? p.rework : p.median;
+        if (value === null || (type === "tokens" && value <= 0)) { previous = null; continue; }
+        const point = {x:x(p.at), y:type === "rework" ? bottom-value*height : yToken(value)};
+        if (previous) svg += line(previous.x,previous.y,point.x,point.y,'stroke="' + color(s.vendor) + '" stroke-width="2"');
+        svg += '<circle data-series="' + type + '" cx="' + point.x + '" cy="' + point.y + '" r="4" fill="' + color(s.vendor) + '"><title>' + title + '</title></circle>';
+        previous = point;
+      }
+    }
+    for (const p of markers) {
+      const at = bucketAt(p.at);
+      svg += '<g data-model-marker="' + esc(p.text) + '"><title>' + esc(p.text + " · 主模型切换 " + day(p.at)) + '</title>' +
+        line(x(at),p.labelY+4,x(at),bottom,'stroke="' + color(p.vendor) + '" stroke-dasharray="5 4"') +
+        label(p.labelX,p.labelY,p.short) + '</g>';
+    }
+    svg += '</svg>';
+    $(type === "rework" ? "trend-rework" : "trend-tokens").innerHTML = svg;
+  }
+}
+
+function rate(k, n) {
+  return '<span class="n">' + k + '/' + n + ' (n=' + n + ')' + (n < 20 ? ' · 样本少' : '') + '</span>';
+}
+
 function render() {
   const ts = filtered();
   const rows = aggregate(ts, keyFn());
   if ($("group").value === "combo+month") rows.sort((a, b) => a.key.localeCompare(b.key));
-  const head = ["", "任务", "有提交", "合入率", "14天返工", "回滚", "CI 新失败 (n)", "原本就红", "$/任务", "$/合入", "输入 k/任务", "缓存读 k/任务", "缓存写 k/任务", "输出 k/任务", "插话/任务", "打断/任务", "等你 分/任务", "合入行数/任务", "精确对上"];
-  $("summary").innerHTML = "<tr>" + head.map((h) => "<th>" + h + "</th>").join("") + "</tr>" + rows.map((r) => "<tr>" + [
-    esc(r.key), r.tasks, r.withCommits, pct(r.landedRate) + ' <span class="n">n=' + r.withCommits + "</span>",
-    pct(r.reworkRate) + ' <span class="n">n=' + r.mature + "</span>",
-    pct(r.revertRate),
-    pct(r.ciBreakRate) + ' <span class="n">n=' + r.ci + "</span>", r.ciInherited,
-    num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.inputPerTask / 1000, 2), num(r.cacheReadPerTask / 1000, 2), num(r.cacheWritePerTask / 1000, 2), num(r.outputPerTask / 1000, 2),
-    num(r.promptsPerTask), num(r.interruptsPerTask, 2), num(r.waitMinPerTask), num(r.linesLandedPerTask, 0), pct(r.exactShare),
-  ].map((c) => "<td>" + c + "</td>").join("") + "</tr>").join("");
+  const all = aggregate(ts, () => "all")[0];
+  const mature = all ? Math.round((all.reworkRate || 0) * all.mature) : 0;
+  const card = (label, value, detail) => '<div class="card"><div class="label">' + label + '</div><strong>' + value + '</strong><span class="n">' + detail + '</span></div>';
+  $("cards").innerHTML = card("任务", ts.length, "n=" + ts.length) +
+    card("有提交 / 合入", all ? all.withCommits + " / " + all.landed : "0 / 0", "任务 n=" + ts.length) +
+    card("14 天返工率", pct(all ? all.reworkRate : null), rate(mature, all ? all.mature : 0)) +
+    card("平均人类提示 / 任务", num(all ? all.promptsPerTask : null), "n=" + ts.length);
+  const more = $("more").checked;
+  const head = ["分组", "任务 n", "有提交", "合入率 k/n", "14天返工 k/n", "输入 k 中位数", "缓存读 k 中位数", "缓存写 k 中位数", "输出 k 中位数", "插话/任务", "打断/任务", "等你 分/任务"];
+  if (more) head.push("回滚率 k/n", "CI 新失败 (n) k/n", "原本就红", "$/任务", "$/合入", "合入行数/任务", "精确对上");
+  $("summary").innerHTML = "<tr>" + head.map((h) => "<th>" + h + "</th>").join("") + "</tr>" + rows.map((r) => {
+    const k = Math.round((r.reworkRate || 0) * r.mature);
+    const cells = [esc(r.key), r.tasks, r.withCommits, pct(r.landedRate) + " " + rate(r.landed, r.withCommits),
+      pct(r.reworkRate) + " " + rate(k, r.mature) + '<span class="rate-bar"><i style="width:' + (r.reworkRate === null ? 0 : r.reworkRate * 100) + '%"></i></span>',
+      num(r.medianInput / 1000, 2), num(r.medianCacheRead / 1000, 2), num(r.medianCacheWrite / 1000, 2), num(r.medianOutput / 1000, 2),
+      num(r.promptsPerTask), num(r.interruptsPerTask, 2), num(r.waitMinPerTask)];
+    if (more) {
+      const commits = ts.filter(t => keyFn()(t) === r.key).flatMap(t => t.commits);
+      cells.push(pct(r.revertRate) + " " + rate(Math.round((r.revertRate || 0) * r.mature), r.mature),
+      pct(r.ciBreakRate) + " " + rate(r.ciBroke, r.ci), r.ciInherited, num(r.costPerTask, 2), num(r.costPerLanded, 2), num(r.linesLandedPerTask, 0), pct(r.exactShare) + " " + rate(commits.filter(c => c.how === "exact").length, commits.length));
+    }
+    return "<tr>" + cells.map(c => "<td>" + c + "</td>").join("") + "</tr>";
+  }).join("");
+  renderTrends(ts);
 
   $("rework").innerHTML = "<tr>" + ["日期", "组合", "仓库", "提交", "修复提交", "间隔天数", "证据"].map(h => "<th>" + h + "</th>").join("") + "</tr>" + ts.flatMap(t => t.commits.filter(c => c.mainline && c.reworked).flatMap(c => c.reworkEvidence.map(f => "<tr>" + [day(c.at), esc(t.combo), esc(t.repo || "–"), esc(c.sha + " " + c.subject), esc(f.sha + " " + f.subject), num(f.days), f.lines.map(l => esc(l.file + ": " + l.text)).join("<br>")].map(v => '<td class="l">' + v + "</td>").join("") + "</tr>"))).join("");
 
@@ -186,7 +369,7 @@ function render() {
   }).join("");
 }
 
-for (const id of ["repo", "kind", "size", "from", "to", "group", "commits", "headless", "norepo"]) $(id).addEventListener("input", render);
+for (const id of ["repo", "agent", "kind", "size", "from", "to", "group", "commits", "headless", "norepo", "empty", "more", "bucket", "token-metric", "markers"]) $(id).addEventListener("input", render);
 render();
 </script>
 </body>

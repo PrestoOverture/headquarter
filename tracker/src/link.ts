@@ -73,6 +73,8 @@ export type Task = Classification & {
   vendor: Session["vendor"];
   combo: string;
   headless: boolean;
+  /** No assistant evidence in any member session: no models and all token fields zero. */
+  empty: boolean;
   repo?: string;
   repoKey?: string;
   cwd: string;
@@ -99,6 +101,10 @@ function sumTokens(sessions: Session[]): Tokens {
   const tokens: Tokens = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 };
   for (const s of sessions) for (const key of Object.keys(tokens) as (keyof Tokens)[]) tokens[key] += s.tokens[key];
   return tokens;
+}
+
+function isEmpty(sessions: Session[]): boolean {
+  return sessions.every(s => Object.keys(s.models).length === 0 && Object.values(s.tokens).every(n => n === 0));
 }
 
 function kindOf(s: Session): ChildKind {
@@ -182,6 +188,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
       vendor: root.vendor,
       combo: comboLabel(root, kinds),
       headless: root.headless,
+      empty: isEmpty(tree),
       repo: repo?.name,
       repoKey: repo?.key,
       cwd: root.cwd,
@@ -254,6 +261,7 @@ export function buildTasks(sessions: Session[], repos: Repos, now = Date.now()):
         combo: comboLabel(root, kinds), kinds: [...kinds].sort(), sessions: group.length, models: Object.keys(models),
         costUSD: group.reduce((n,s) => n+(s.costUSD ?? 0),0),
         tokens: sumTokens(group),
+        empty: isEmpty(group),
         humanPrompts: group.reduce((n,s) => n+s.humanPrompts,0),
         interrupts: group.reduce((n,s) => n+s.interrupts,0), waitMs: group.reduce((n,s) => n+s.waitMs,0), commits,
       };
