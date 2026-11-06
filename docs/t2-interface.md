@@ -1,6 +1,6 @@
 # T2 接口与数据模型（2026-11-06）
 
-> 状态：插件接口、统一 token、OpenCode 插件、四项指标已实现并合入 main（`tracker/src/plugins.ts`、`opencode.ts`）。看板和形态还没定。
+> 状态：插件接口、统一 token、OpenCode 插件、四项指标已实现并合入 main（`tracker/src/plugins.ts`、`opencode.ts`）。看板已做成离线的 `report.html`（`tracker/src/report.ts`）；形态（`serve`、MCP、打包）还没定。
 
 先定接口，再做看板。本文件定义：解析器插件长什么样、它交出什么数据、result 由哪几项组成。看板和最终形态（npm 包 + `serve` + MCP）等用户拍板后再写。
 
@@ -85,5 +85,5 @@ tokens: { input: number; cacheRead: number; cacheWrite: number; output: number; 
 
 ## 不在这一步做的
 
-- 看板、`serve`、MCP server、npm 打包（等形态定下来）。
+- `serve`、MCP server、npm 打包（等形态定下来）。
 - 用模型判断"是否修复""任务类型"（如要做，必须是可选、默认关闭、并在报表里标出）。
