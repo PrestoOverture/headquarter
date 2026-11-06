@@ -5,7 +5,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { COMMITS, commitShasIn, emptySession, finish, type Session, touch, WAIT_CAP_MS } from "./types";
-import type { SourcePlugin } from "./plugins";
+import type { SessionFileReader, SourcePlugin } from "./plugins";
+import { directoryNames } from "./files";
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-py", "sdk-ts"]);
 const NOT_A_PROMPT = /^(<task-notification>|<local-command-|<system-reminder>|This session is being continued|Caveat: )/;
@@ -138,31 +139,43 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
 }
 
 /** Every session under `root` (default ~/.claude/projects), subagents included. */
-export function readClaude(root: string): Session[] {
+export function readClaude(root: string, readFile: SessionFileReader = (_file, parse) => parse()): Session[] {
   const out: Session[] = [];
   let dirs: string[];
   try {
-    dirs = readdirSync(root);
+    dirs = directoryNames(root);
   } catch {
     return out;
   }
   for (const dir of dirs) {
     const path = join(root, dir);
     if (!statSync(path).isDirectory()) continue;
-    for (const name of readdirSync(path)) {
+    for (const name of directoryNames(path)) {
       if (!name.endsWith(".jsonl")) continue;
       const file = join(path, name);
-      const main = parseClaude(readFileSync(file, "utf8"), file);
+      const [main] = readFile(file, () => {
+        const s = parseClaude(readFileSync(file, "utf8"), file);
+        return s ? [s] : [];
+      });
       if (!main) continue;
       out.push(main);
       const subDir = join(path, basename(name, ".jsonl"), "subagents");
       let subs: string[] = [];
       try {
-        subs = readdirSync(subDir).filter((n) => n.endsWith(".jsonl"));
+        subs = directoryNames(subDir).filter((n) => n.endsWith(".jsonl"));
       } catch {}
       for (const sub of subs) {
         const sf = join(subDir, sub);
-        const s = parseClaude(readFileSync(sf, "utf8"), sf, main.id);
+        const [s] = readFile(sf, () => {
+          const s = parseClaude(readFileSync(sf, "utf8"), sf, main.id);
+          return s ? [s] : [];
+        });
+        // Parent metadata may change while the subagent file itself stays unchanged.
+        if (s && s.parent !== main.id) {
+          const prefix = `${s.parent}/agent-`;
+          if (s.id.startsWith(prefix)) s.id = `${main.id}/agent-${s.id.slice(prefix.length)}`;
+          s.parent = main.id;
+        }
         if (s) out.push(s);
       }
     }
@@ -172,6 +185,7 @@ export function readClaude(root: string): Session[] {
 
 export const claudePlugin: SourcePlugin = {
   name: "claude",
+  version: "1",
   defaultPaths: (home) => [join(home, ".claude/projects")],
   detect: (path) => {
     try {

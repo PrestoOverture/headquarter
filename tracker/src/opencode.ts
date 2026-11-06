@@ -1,23 +1,44 @@
 // OpenCode's local database. Only session, message and part are read.
-import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import type { SourcePlugin } from "./plugins";
+import { createRequire } from "node:module";
+import type { SessionFileReader, SourcePlugin } from "./plugins";
 import { COMMITS, commitShasIn, emptySession, finish, type Session, WAIT_CAP_MS } from "./types";
+
+function openDatabase(file: string) {
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  if (major! < 22 || (major === 22 && minor! < 13)) throw new Error("Reading OpenCode needs Node 22.13 or newer");
+  // Loading node:sqlite emits this warning synchronously. Forward all other warnings,
+  // and restore the original handler before opening or reading the database.
+  const emitWarning = process.emitWarning;
+  let sqlite: typeof import("node:sqlite");
+  try {
+    process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
+      if (warning === "SQLite is an experimental feature and might change at any time" && args[0] === "ExperimentalWarning") return;
+      Reflect.apply(emitWarning, process, [warning, ...args]);
+    }) as typeof process.emitWarning;
+    sqlite = createRequire(import.meta.url)("node:sqlite");
+  } finally { process.emitWarning = emitWarning; }
+  return new sqlite.DatabaseSync(file, { readOnly: true });
+}
 
 function databasePath(path: string): string {
   try { if (statSync(path).isDirectory()) return join(path, "opencode.db"); } catch {}
   return path;
 }
 
-export function readOpenCode(path: string): Session[] {
+export function readOpenCode(path: string, readFile: SessionFileReader = (_file, parse) => parse()): Session[] {
   const file = databasePath(path);
   if (!opencodePlugin.detect(file)) return [];
-  const db = new Database(file, { readonly: true });
+  return readFile(file, () => parseOpenCode(file));
+}
+
+function parseOpenCode(file: string): Session[] {
+  const db = openDatabase(file);
   try {
-    const sessions = db.query("SELECT id, directory, parent_id, time_created, time_updated FROM session ORDER BY time_created, id").all() as any[];
-    const messages = db.query("SELECT id, session_id, time_created, data FROM message ORDER BY time_created, id").all() as any[];
-    const parts = db.query("SELECT message_id, data FROM part ORDER BY time_created, id").all() as any[];
+    const sessions = db.prepare("SELECT id, directory, parent_id, time_created, time_updated FROM session ORDER BY time_created, id").all() as any[];
+    const messages = db.prepare("SELECT id, session_id, time_created, data FROM message ORDER BY time_created, id").all() as any[];
+    const parts = db.prepare("SELECT message_id, data FROM part ORDER BY time_created, id").all() as any[];
     const partsByMessage = new Map<string, any[]>();
     for (const row of parts) {
       const list = partsByMessage.get(row.message_id) ?? [];
@@ -80,6 +101,7 @@ export function readOpenCode(path: string): Session[] {
 
 export const opencodePlugin: SourcePlugin = {
   name: "opencode",
+  version: "1",
   defaultPaths: home => [join(home, ".local/share/opencode")],
   detect: path => { try { return statSync(databasePath(path)).isFile(); } catch { return false; } },
   read: readOpenCode,

@@ -1,6 +1,7 @@
 // Attribute failed checks to a task only when its nearest checked first-parent ancestor passed.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { spawn } from "node:child_process";
 import type { Repos } from "./git";
 import type { Task } from "./link";
 
@@ -21,9 +22,14 @@ export type CheckRun = { name: string; id: number; status: string; conclusion: s
 type RunsFetcher = (slug: string, sha: string) => Promise<CheckRun[] | null>;
 
 const fetchRuns: RunsFetcher = async (slug, sha) => {
-  const p = Bun.spawn(["gh", "api", "--method", "GET", `repos/${slug}/commits/${sha}/check-runs?per_page=100`, "--jq", "[.check_runs[] | {name, status, conclusion, id, completed_at}]"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-  const output = await new Response(p.stdout).text();
-  if (await p.exited !== 0) return null;
+  const output = await new Promise<string | null>((resolve) => {
+    const p = spawn("gh", ["api", "--method", "GET", `repos/${slug}/commits/${sha}/check-runs?per_page=100`, "--jq", "[.check_runs[] | {name, status, conclusion, id, completed_at}]"], { stdio: ["ignore", "pipe", "ignore"] });
+    const chunks: Buffer[] = [];
+    p.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    p.on("error", () => resolve(null));
+    p.on("close", (code) => resolve(code === 0 ? Buffer.concat(chunks).toString() : null));
+  });
+  if (output === null) return null;
   return JSON.parse(output || "[]") as CheckRun[];
 };
 
@@ -46,8 +52,8 @@ export async function fetchVerdict(slug: string, sha: string, at: number, fetche
   return Object.fromEntries(kept.map((r) => [r.name, OK.has(r.conclusion ?? "") ? "pass" : "fail"]));
 }
 
-export async function addCi(tasks: Task[], repos: Repos, cacheFile: string, log: (s: string) => void, fetcher: Fetcher = fetchVerdict) {
-  const cache: Record<string, CacheEntry> = existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, "utf8")) : {};
+export async function addCi(tasks: Task[], repos: Repos, cacheFile: string | undefined, log: (s: string) => void, fetcher: Fetcher = fetchVerdict) {
+  const cache: Record<string, CacheEntry> = cacheFile && existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, "utf8")) : {};
   const repoOf = new Map(repos.all().map((r) => [r.key, r]));
   const pending = new Map<string, Promise<Result>>();
   let active = 0, asked = 0;
@@ -103,7 +109,9 @@ export async function addCi(tasks: Task[], repos: Repos, cacheFile: string, log:
     }));
     t.ci = verdicts.includes("broke") ? "broke" : verdicts.includes("pass") ? "pass" : verdicts.includes("inherited") ? "inherited" : "unknown";
   }));
-  mkdirSync(dirname(cacheFile), { recursive: true });
-  writeFileSync(cacheFile, JSON.stringify(cache));
-  log(`ci: ${asked} commits asked on GitHub, cache ${cacheFile}`);
+  if (cacheFile) {
+    mkdirSync(dirname(cacheFile), { recursive: true });
+    writeFileSync(cacheFile, JSON.stringify(cache));
+  }
+  log(`ci: ${asked} commits asked on GitHub, cache ${cacheFile ?? "disabled"}`);
 }

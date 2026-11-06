@@ -3,7 +3,9 @@
 // (hq's worktrees) and `.claude/worktrees/<name>` fall back to the repository they came from.
 
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { GitCommands } from "./git-cache";
 
 export type Commit = {
   sha: string;
@@ -30,15 +32,16 @@ export type Repo = {
 };
 
 export function run(cmd: string[], cwd: string): { code: number; out: string } {
-  const p = Bun.spawnSync(cmd, { cwd, stdin: "ignore", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
-  return { code: p.exitCode ?? -1, out: p.stdout.toString() };
+  const p = spawnSync(cmd[0]!, cmd.slice(1), { cwd, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 1024 * 1024 * 1024 });
+  return { code: p.status ?? -1, out: p.stdout?.toString() ?? "" };
 }
 
 export const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|uv\.lock|poetry\.lock)$/;
 
-function loadCommits(top: string): Map<string, Commit> {
+function loadCommits(git: GitCommands): Map<string, Commit> {
   const commits = new Map<string, Commit>();
-  const r = run(["git", "log", "--all", "--numstat", "--no-renames", "--format=%x1e%H%x1f%P%x1f%ct%x1f%an%x1f%s%x1f%b%x1d"], top);
+  const r = git.read(["log", "--all", "--numstat", "--no-renames", "--format=%x1e%H%x1f%P%x1f%ct%x1f%an%x1f%s%x1f%b%x1d"]);
   if (r.code !== 0) return commits;
   for (const rec of r.out.split("\x1e")) {
     if (!rec.trim()) continue;
@@ -64,36 +67,42 @@ function loadCommits(top: string): Map<string, Commit> {
   return commits;
 }
 
-function mainRef(top: string): string | undefined {
-  const head = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], top);
+function mainRef(git: GitCommands): string | undefined {
+  const head = git.read(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
   if (head.code === 0 && head.out.trim()) return head.out.trim();
   for (const ref of ["main", "master", "origin/main", "origin/master"]) {
-    if (run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], top).code === 0) return ref;
+    if (git.read(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code === 0) return ref;
   }
   return undefined;
 }
 
-function identify(dir: string): { key: string; top: string } | null {
-  const common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], dir);
-  const top = run(["git", "rev-parse", "--show-toplevel"], dir);
-  if (common.code !== 0 || top.code !== 0) return null;
-  return { key: realpathSync(common.out.trim()), top: top.out.trim() };
+function identify(dir: string, exec: typeof run): { key: string; top: string; gitDir: string } | null {
+  const result = exec(["git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", "--show-toplevel"], dir);
+  if (result.code !== 0) return null;
+  const [common, gitDir, top] = result.out.trim().split("\n");
+  if (!common || !gitDir || !top) return null;
+  return { key: realpathSync(common), top, gitDir };
 }
 
-function openRepo(key: string, top: string): Repo {
-  const commits = loadCommits(top);
-  const main = mainRef(top);
+const commands = new WeakMap<Repo, GitCommands>();
+function gitOf(repo: Repo): GitCommands {
+  return commands.get(repo) ?? new GitCommands(repo.key, repo.top, repo.key, run);
+}
+
+function openRepo(key: string, top: string, git: GitCommands): Repo {
+  const commits = loadCommits(git);
+  const main = mainRef(git);
   if (main) {
     // the local main and its remote both count: work merged on either has landed
     const refs = [main, main.replace(/^origin\//, ""), `origin/${main.replace(/^origin\//, "")}`];
-    const valid = refs.filter((ref) => run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], top).code === 0);
-    const list = run(["git", "rev-list", ...new Set(valid)], top);
+    const valid = refs.filter((ref) => git.read(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code === 0);
+    const list = git.read(["rev-list", ...new Set(valid)]);
     for (const sha of list.out.split("\n")) {
       const c = commits.get(sha);
       if (c) c.mainline = true;
     }
   }
-  const remoteR = run(["git", "config", "--get", "remote.origin.url"], top);
+  const remoteR = git.read(["config", "--get", "remote.origin.url"]);
   const remote = remoteR.code === 0 ? remoteR.out.trim() : undefined;
   const shas = [...commits.keys()];
   const prefixCache = new Map<string, Commit | undefined>();
@@ -105,15 +114,20 @@ function openRepo(key: string, top: string): Repo {
     return c;
   };
   const name = basename(key.endsWith("/.git") ? dirname(key) : key.replace(/\.git$/, ""));
-  return { key, name, top, remote, commits, byPrefix, main };
+  const repo = { key, name, top, remote, commits, byPrefix, main };
+  commands.set(repo, git);
+  return repo;
 }
 
 /** Finds and caches repositories by working directory. */
 export class Repos {
   private byDir = new Map<string, Repo | null>();
   private byKey = new Map<string, Repo>();
+  private byRoot = new Map<string, Repo>();
+  private unidentified = new Set<string>();
+  private gitVersion?: ReturnType<typeof run>;
 
-  constructor(private readonly home: string) {}
+  constructor(private readonly home: string, private readonly cacheDir?: string, private readonly exec = run) {}
 
   all(): Repo[] {
     return [...this.byKey.values()];
@@ -139,12 +153,30 @@ export class Repos {
     if (claudeWt) candidates.push(claudeWt[1]!);
     for (const dir of candidates) {
       if (!existsSync(dir) || dir === "/") continue;
-      const id = identify(dir);
-      if (!id) continue;
+      // Check every ancestor for a nested repo/worktree before reusing a discovery. Do not
+      // persist discovery: a later collection must notice moved/deleted/new repositories.
+      const physical = realpathSync(dir);
+      if (this.unidentified.has(physical)) continue;
+      let root = physical;
+      while (root !== "/" && !existsSync(join(root, ".git"))) root = dirname(root);
+      const memoize = !Object.keys(process.env).some(name => /^GIT_(DIR|COMMON_DIR|WORK_TREE|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM)$/.test(name));
+      if (memoize && this.byRoot.has(root)) {
+        return this.byRoot.get(root)!;
+      }
+      const id = identify(dir, this.exec);
+      if (!id) {
+        this.unidentified.add(physical);
+        continue;
+      }
       if (realpathSync(id.top) === realpathSync(this.home)) return null;
       const known = this.byKey.get(id.key);
-      if (known) return known;
-      const repo = openRepo(id.key, id.top);
+      if (known) {
+        if (memoize) this.byRoot.set(root, known);
+        return known;
+      }
+      if (this.cacheDir) this.gitVersion ??= this.exec(["git", "--version"], id.top);
+      const repo = openRepo(id.key, id.top, new GitCommands(id.key, id.top, id.gitDir, this.exec, this.cacheDir, this.gitVersion));
+      if (memoize) this.byRoot.set(root, repo);
       this.byKey.set(repo.key, repo);
       return repo;
     }
@@ -161,7 +193,7 @@ function landings(repo: Repo, sha: string): string[] {
     if (repo.main) {
       const local = repo.main.replace(/^origin\//, "");
       for (const ref of new Set([repo.main, local, `origin/${local}`])) {
-        const result = run(["git", "rev-list", "--first-parent", ref], repo.top);
+        const result = gitOf(repo).read(["rev-list", "--first-parent", ref]);
         if (result.code === 0) chains.push(new Map(result.out.trim().split("\n").map((s, i) => [s, i])));
       }
     }
@@ -216,7 +248,7 @@ function isReflow(text: string, runs: string[][]): boolean {
   }
   return false;
 }
-const originsCache = new Map<string, Map<string, ReworkLine[]>>();
+const originsCache = new WeakMap<Repo, Map<string, Map<string, ReworkLine[]>>>();
 
 /**
  * Cached evidence from blame of the parent over deleted ranges. Text added anywhere in the
@@ -224,11 +256,12 @@ const originsCache = new Map<string, Map<string, ReworkLine[]>>();
  * one hunk of the same file is a formatter reflow. Short or punctuation-only deletions are ignored.
  */
 export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[]> {
-  const key = `${repo.key}@${sha}`;
-  const hit = originsCache.get(key);
+  let cache = originsCache.get(repo);
+  if (!cache) { cache = new Map(); originsCache.set(repo, cache); }
+  const hit = cache.get(sha);
   if (hit) return hit;
   const origins = new Map<string, ReworkLine[]>();
-  const diff = run(["git", "diff", "-U0", "--no-renames", "--no-color", `${sha}^`, sha], repo.top);
+  const diff = gitOf(repo).read(["diff", "-U0", "--no-renames", "--no-color", `${sha}^`, sha], true);
   if (diff.code === 0) {
     const added = new Set<string>();
     const addedByFile = new Map<string, string[][]>();
@@ -261,7 +294,7 @@ export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[
       }
     }
     for (const [f, ls] of ranges) {
-      const blame = run(["git", "blame", "--porcelain", ...ls, `${sha}^`, "--", f], repo.top);
+      const blame = gitOf(repo).read(["blame", "--porcelain", ...ls, `${sha}^`, "--", f], true);
       if (blame.code !== 0) continue;
       let origin = "";
       for (const l of blame.out.split("\n")) {
@@ -276,7 +309,7 @@ export function originEvidence(repo: Repo, sha: string): Map<string, ReworkLine[
       }
     }
   }
-  originsCache.set(key, origins);
+  cache.set(sha, origins);
   return origins;
 }
 

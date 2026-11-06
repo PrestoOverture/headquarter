@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { aggregate } from "./aggregate.js";
 import type { Task } from "./link";
 
+const TREND_SRC = readFileSync(new URL("./trend.js", import.meta.url), "utf8").replace(/^export /gm, "");
 const AGGREGATE_SRC = readFileSync(new URL("./aggregate.js", import.meta.url), "utf8").replace(/^export /m, "");
 
 export type Meta = { generatedAt: number; sessions: Record<string, number>; repos: number; ci: boolean };
@@ -41,9 +42,13 @@ export function terminalTable(tasks: Task[]): string {
   return [line(head), ...body.map(line)].join("\n");
 }
 
-export function html(tasks: Task[], meta: Meta): string {
+export function dashboardData(tasks: Task[], meta: Meta) {
+  return { meta, tasks: tasks.map(slim) };
+}
+
+export function html(tasks: Task[], meta: Meta, live = false): string {
   // Escape recorded URLs in the JSON without changing their decoded display text.
-  const data = JSON.stringify({ meta, tasks: tasks.map(slim) }).replace(/</g, "\\u003c").replace(/https?:/gi, s => s.slice(0, -1) + "\\u003a");
+  const data = JSON.stringify(dashboardData(tasks, meta)).replace(/</g, "\\u003c").replace(/https?:/gi, s => s.slice(0, -1) + "\\u003a");
   return `<!doctype html>
 <html lang="zh">
 <head>
@@ -61,7 +66,8 @@ h2 { font-size: 16px; margin: 32px 0 8px; }
 .sub { color: var(--muted); margin: 0 0 16px; }
 .filters { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; padding:12px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
 .filters label { display:flex; gap:6px; align-items:center; color:var(--muted); }
-select, input { font: inherit; color: var(--fg); background: var(--bg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; }
+select, input, button { font: inherit; color: var(--fg); background: var(--bg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; }
+button { cursor:pointer; }
 .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
@@ -92,6 +98,7 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
 <main>
 <h1>Agent 效果追踪</h1>
 <p class="sub" id="meta"></p>
+<p id="refresh-controls" hidden><button id="refresh" type="button">刷新</button> <span id="last-updated"></span> <span id="refresh-status" role="status"></span></p>
 <div class="filters">
   <label>仓库 <select id="repo"></select></label>
   <label>agent <select id="agent"></select></label>
@@ -146,21 +153,52 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
 <div class="scroll"><table id="rework"></table></div>
 </main>
 <script>
-const DATA = ${data};
+let DATA = ${data};
 ${AGGREGATE_SRC}
+const {bucketAt: trendBucketAt, modelSwitches: trendModelSwitches, trend} = (() => {
+${TREND_SRC}
+return {bucketAt, modelSwitches, trend};
+})();
 const $ = (id) => document.getElementById(id);
 const pct = (x) => x === null ? "–" : Math.round(x * 100) + "%";
 const num = (x, d = 1) => x === null ? "–" : x.toFixed(d);
 const day = (ms) => new Date(ms).toISOString().slice(0, 10);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-const m = DATA.meta;
-$("meta").textContent = "生成于 " + new Date(m.generatedAt).toLocaleString() + " · " + Object.entries(m.sessions).map(([name, count]) => name + " 会话 " + count).join(" · ") + " · 仓库 " + m.repos + (m.ci ? " · 含 CI" : " · 未查 CI（--ci）");
-$("empty-count").textContent = "（" + DATA.tasks.filter(t => t.empty).length + "）";
-const agents = [...new Set(DATA.tasks.map(t => t.vendor))].sort();
-$("agent").innerHTML = '<option value="">全部</option>' + agents.map(v => '<option>' + esc(v) + '</option>').join("");
-const repos = [...new Set(DATA.tasks.map((t) => t.repo).filter(Boolean))].sort();
-$("repo").innerHTML = '<option value="">全部</option>' + repos.map((r) => '<option>' + esc(r) + '</option>').join("");
+let m, agents;
+function updateData(data) {
+  DATA = data;
+  m = DATA.meta;
+  $("meta").textContent = "生成于 " + new Date(m.generatedAt).toLocaleString() + " · " + Object.entries(m.sessions).map(([name, count]) => name + " 会话 " + count).join(" · ") + " · 仓库 " + m.repos + (m.ci ? " · 含 CI" : " · 未查 CI（--ci）");
+  $("last-updated").textContent = "上次更新 " + new Date(m.generatedAt).toLocaleString();
+  $("empty-count").textContent = "（" + DATA.tasks.filter(t => t.empty).length + "）";
+  agents = [...new Set(DATA.tasks.map(t => t.vendor))].sort();
+  const repos = [...new Set(DATA.tasks.map((t) => t.repo).filter(Boolean))].sort();
+  for (const [id, choices] of [["agent", agents], ["repo", repos]]) {
+    const selected = $(id).value;
+    const options = selected && !choices.includes(selected) ? [...choices, selected] : choices;
+    $(id).innerHTML = '<option value="">全部</option>' + options.map(v => '<option>' + esc(v) + '</option>').join("");
+    $(id).value = selected;
+  }
+}
+updateData(DATA);
+
+if (${live} && location.protocol !== "file:") {
+  $("refresh-controls").hidden = false;
+  $("refresh").addEventListener("click", async () => {
+    $("refresh").disabled = true;
+    $("refresh-status").textContent = "刷新中…";
+    try {
+      const response = await fetch("/api/refresh", { method:"POST", headers:{"X-Crewmeter":"1"} });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      updateData(await response.json());
+      render();
+      $("refresh-status").textContent = "";
+    } catch (error) {
+      $("refresh-status").textContent = "刷新失败：" + error.message;
+    } finally { $("refresh").disabled = false; }
+  });
+}
 
 for (const [id, options] of [["kind", ["文档", "测试", "界面", "代码", "–"]], ["size", ["<100", "100–300", "300–1k", "≥1k", "–"]]]) {
   $(id).innerHTML = '<option value="">全部</option>' + options.map(v => '<option>' + esc(v) + '</option>').join("");
@@ -194,35 +232,10 @@ function keyFn() {
 }
 
 const DAY = 86400000;
-// Fixed UTC Monday anchor keeps bucket boundaries stable when filters change.
-const ANCHOR = Date.UTC(1970, 0, 5);
-function bucketAt(at) {
-  const span = ($("bucket").value === "week" ? 7 : 28) * DAY;
-  return ANCHOR + Math.floor((at - ANCHOR) / span) * span;
-}
+function bucketAt(at) { return trendBucketAt(at, $("bucket").value); }
+function modelSwitches(tasks) { return trendModelSwitches(tasks, $("bucket").value); }
 const colors = ["#387bcb", "#d07724", "#8c59b5", "#28917d", "#c45169", "#7c8234"];
 const color = vendor => colors[agents.indexOf(vendor) % colors.length];
-function modelSwitches(tasks) {
-  const vendors = new Map();
-  for (const t of tasks) {
-    if (!vendors.has(t.vendor)) vendors.set(t.vendor, new Map());
-    const buckets = vendors.get(t.vendor), at = bucketAt(t.start);
-    if (!buckets.has(at)) buckets.set(at, new Map());
-    const counts = buckets.get(at), model = t.model || "?";
-    counts.set(model, (counts.get(model) || 0) + 1);
-  }
-  const switches = [];
-  for (const [vendor, buckets] of vendors) {
-    let previous = null;
-    for (const [at, counts] of [...buckets].sort((a,b) => a[0]-b[0])) {
-      const ranked = [...counts].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
-      const model = counts.get(previous) === ranked[0][1] ? previous : ranked[0][0];
-      if (previous !== null && model !== previous) switches.push({vendor, at, old:previous, model});
-      previous = model;
-    }
-  }
-  return switches.sort((a,b) => a.at-b.at || a.vendor.localeCompare(b.vendor));
-}
 
 function renderTrends(ts) {
   const vendors = [...new Set(ts.map(t => t.vendor))].sort();
@@ -232,32 +245,15 @@ function renderTrends(ts) {
     return;
   }
   const span = ($("bucket").value === "week" ? 7 : 28) * DAY;
-  const starts = ts.map(t => bucketAt(t.start));
-  const first = Math.min(...starts), last = Math.max(...starts);
-  const buckets = [];
-  for (let at = first; at <= last; at += span) buckets.push(at);
-  const grouped = new Map();
-  for (const t of ts) {
-    const key = JSON.stringify([t.vendor, bucketAt(t.start)]);
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(t);
-  }
+  const {buckets, series, switches} = trend(ts, $("bucket").value, $("token-metric").value);
+  const first = buckets[0];
   const input = $("token-metric").value === "input";
-  const series = vendors.map(vendor => ({vendor, points:buckets.map(at => {
-    const tasks = grouped.get(JSON.stringify([vendor, at])) || [];
-    const mature = tasks.filter(t => t.landed && t.mature);
-    const k = mature.filter(t => t.reworked).length;
-    const values = tasks.map(t => input ? t.tokens.input + t.tokens.cacheRead + t.tokens.cacheWrite : t.tokens.output).sort((a,b) => a-b);
-    const mid = Math.floor(values.length / 2);
-    const median = !values.length ? null : values.length % 2 ? values[mid] : (values[mid-1] + values[mid]) / 2;
-    return {at, n:tasks.length, mature:mature.length, k, rework:mature.length >= 3 ? k / mature.length : null, median};
-  })}));
   const left = 72, right = 840, width = right-left, height = 236;
   const step = width / buckets.length;
   const x = at => left + ((at-first) / span + 0.5) * step;
   // Put marker labels in non-overlapping lanes above the plot, on both charts.
   const lanes = [];
-  const markers = $("markers").checked ? modelSwitches(ts).map(p => {
+  const markers = $("markers").checked ? switches.map(p => {
       const text = p.vendor + ": " + p.old + " → " + p.model;
       const short = text.length > 80 ? text.slice(0,77) + "…" : text;
       const labelWidth = [...short].reduce((n,c) => n + (c.charCodeAt(0) > 0x2e80 ? 12 : 7), 0);
@@ -367,6 +363,20 @@ function render() {
       t.costUSD ? t.costUSD.toFixed(2) : "–", num(t.tokens.input / 1000, 2), num(t.tokens.cacheRead / 1000, 2), num(t.tokens.cacheWrite / 1000, 2), num(t.tokens.output / 1000, 2), t.humanPrompts,
     ].map((c) => "<td>" + c + "</td>").join("") + '<td class="l">' + commits + "</td></tr>";
   }).join("");
+}
+
+if (${live} && location.hash) {
+  const params = new URLSearchParams(location.hash.slice(1));
+  for (const id of ["from", "to", "repo", "agent"]) if (params.has(id)) {
+    const value = params.get(id);
+    if ((id === "repo" || id === "agent") && value && !DATA.tasks.some(t => (id === "repo" ? t.repo : t.vendor) === value)) {
+      $(id).innerHTML += '<option>' + esc(value) + '</option>';
+    }
+    $(id).value = value;
+  }
+  for (const [key, id] of [["commits_only", "commits"], ["include_headless", "headless"], ["include_empty", "empty"]]) {
+    if (params.has(key)) $(id).checked = params.get(key) === "true";
+  }
 }
 
 for (const id of ["repo", "agent", "kind", "size", "from", "to", "group", "commits", "headless", "norepo", "empty", "more", "bucket", "token-metric", "markers"]) $(id).addEventListener("input", render);

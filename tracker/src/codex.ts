@@ -4,8 +4,10 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { COMMITS, commitShasIn, emptySession, finish, type Session, touch, WAIT_CAP_MS } from "./types";
-import type { SourcePlugin } from "./plugins";
+import type { SessionFileReader, SourcePlugin } from "./plugins";
+import { directoryNames } from "./files";
 
 const HEADLESS_ORIGINATORS = new Set(["codex_exec", "claude2codex", "c2c-mcp"]);
 const DELEGATED_ORIGINATORS = new Set(["claude2codex", "c2c-mcp"]);
@@ -130,15 +132,15 @@ export function parseCodex(text: string, file: string): Session | null {
 
 function decompress(file: string): string {
   if (!file.endsWith(".zst")) return readFileSync(file, "utf8");
-  const p = Bun.spawnSync(["zstd", "-dc", file], { stdin: "ignore" });
-  if (p.exitCode !== 0) return "";
+  const p = spawnSync("zstd", ["-dc", file], { stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1024 * 1024 * 1024 });
+  if (p.status !== 0) return "";
   return p.stdout.toString();
 }
 
 function walk(dir: string, out: string[]) {
   let names: string[];
   try {
-    names = readdirSync(dir);
+    names = directoryNames(dir);
   } catch {
     return;
   }
@@ -150,13 +152,15 @@ function walk(dir: string, out: string[]) {
 }
 
 /** Every session under `root` (default ~/.codex/sessions). */
-export function readCodex(root: string): Session[] {
+export function readCodex(root: string, readFile: SessionFileReader = (_file, parse) => parse()): Session[] {
   const files: string[] = [];
   walk(root, files);
   const out: Session[] = [];
   for (const f of files) {
-    const s = parseCodex(decompress(f), f);
-    if (s) out.push(s);
+    out.push(...readFile(f, () => {
+      const s = parseCodex(decompress(f), f);
+      return s ? [s] : [];
+    }));
   }
   return out;
 }
@@ -171,6 +175,7 @@ function hasRecords(path: string): boolean {
 
 export const codexPlugin: SourcePlugin = {
   name: "codex",
+  version: "1",
   defaultPaths: (home) => [join(home, ".codex/sessions")],
   detect: hasRecords,
   read: readCodex,
