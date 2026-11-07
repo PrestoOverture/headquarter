@@ -8,17 +8,20 @@
 
 需要 Node.js **>=22.13** 和本地 `git`；读取压缩的 Codex `.zst` 日志还需要 `zstd`，`--ci` 需要已配置好 GitHub 访问权限的 `gh`。Bun 可通过 `bunx crewmeter` 调用同一安装。
 
-此项目保留 `private: true`，本次仅验证本地 tarball，未发布到 npm。源码构建需要 Bun，安装打包后的 tarball 不需要构建：
+不用安装，直接运行：
+
+```sh
+npx crewmeter --help
+npx crewmeter serve --open
+```
+
+从源码构建需要 Bun：
 
 ```sh
 cd tracker
+bun install
 bun run build
-npm pack  # prepack 会再次运行 build
-
-# 在另一个临时目录中安装；替换成刚生成的 tarball 的绝对路径
-npm install /absolute/path/to/crewmeter-0.1.0.tgz
-npx crewmeter --version
-npx crewmeter --help
+node dist/cli.js --help
 ```
 
 ## 三个命令
@@ -69,7 +72,7 @@ npx crewmeter mcp
 
 ## MCP 配置
 
-以下是通过包名启动的配置格式。由于本项目尚未发布，当前验证请在已安装 tarball 的目录运行，或将 `npx` 启动方式替换为 `node /absolute/path/to/install/node_modules/crewmeter/dist/cli.js mcp`。GUI 客户端需能找到 Node；自定义源目录和缓存时，在 `mcp` 后附加上面的共用参数。
+以下配置通过 `npx` 按包名启动。GUI 客户端需能找到 Node；自定义源目录和缓存时，在 `mcp` 后附加上面的共用参数。
 
 ### Claude Code
 

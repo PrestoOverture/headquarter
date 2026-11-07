@@ -1,11 +1,26 @@
 {
   "name": "crewmeter",
   "version": "0.1.0",
-  "private": true,
+  "description": "Local, read-only tracker of how your coding agents (Claude Code, Codex, OpenCode) actually performed: landed rate, 14-day rework, tokens and your attention, per agent combination.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PrestoOverture/headquarter.git",
+    "directory": "tracker"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "opencode",
+    "agents",
+    "mcp",
+    "metrics"
+  ],
   "type": "module",
   "files": [
-    "dist",
-    "README.md"
+    "LICENSE",
+    "README.md",
+    "dist"
   ],
   "bin": {
     "crewmeter": "dist/cli.js"
