@@ -80,6 +80,8 @@ export type Task = Classification & {
   cwd: string;
   start: number;
   end: number;
+  /** Latest member record is within 30 minutes of collection time. Set by collect. */
+  ongoing?: boolean;
   model?: string;
   models: string[];
   kinds: ChildKind[];

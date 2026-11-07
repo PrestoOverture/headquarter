@@ -39,27 +39,41 @@ function parseOpenCode(file: string): Session[] {
     const sessions = db.prepare("SELECT id, directory, parent_id, time_created, time_updated FROM session ORDER BY time_created, id").all() as any[];
     const messages = db.prepare("SELECT id, session_id, time_created, data FROM message ORDER BY time_created, id").all() as any[];
     const parts = db.prepare("SELECT message_id, data FROM part ORDER BY time_created, id").all() as any[];
-    const partsByMessage = new Map<string, any[]>();
-    for (const row of parts) {
-      const list = partsByMessage.get(row.message_id) ?? [];
-      list.push(JSON.parse(row.data));
-      partsByMessage.set(row.message_id, list);
-    }
     const byId = new Map<string, Session>();
     for (const row of sessions) {
       const s = emptySession("opencode", row.id, file);
-      s.cwd = row.directory;
+      s.parse.records++;
+      s.parse.recognized++;
+      s.cwd = typeof row.directory === "string" ? row.directory : "";
       s.start = row.time_created;
       s.end = row.time_updated;
       s.times.push(s.start, s.end);
       if (row.parent_id) { s.parent = row.parent_id; s.role = "subagent"; }
       byId.set(s.id, s);
     }
+    const partsByMessage = new Map<string, any[]>();
+    const messageSessions = new Map(messages.map(row => [row.id, byId.get(row.session_id)]));
+    const parseRow = (s: Session, data: string): any => {
+      s.parse.records++;
+      try { return JSON.parse(data); }
+      catch { s.parse.unparsed++; return null; }
+    };
+    for (const row of parts) {
+      const s = messageSessions.get(row.message_id);
+      if (!s) continue;
+      const d = parseRow(s, row.data);
+      if (!d || typeof d !== "object") continue;
+      const list = partsByMessage.get(row.message_id) ?? [];
+      list.push(d);
+      partsByMessage.set(row.message_id, list);
+    }
     const lastAssistant = new Map<string, number>();
     for (const row of messages) {
       const s = byId.get(row.session_id);
       if (!s) continue;
-      const d = JSON.parse(row.data);
+      const d = parseRow(s, row.data);
+      if (!d || typeof d !== "object") continue;
+      if (d.role === "assistant" || d.role === "user") s.parse.recognized++;
       const at = d.time?.created ?? row.time_created;
       const completed = d.time?.completed ?? at;
       s.start = Math.min(s.start, at);
@@ -69,6 +83,7 @@ function parseOpenCode(file: string): Session[] {
       s.events.push(event);
       const parts = partsByMessage.get(row.id) ?? [];
       if (d.role === "assistant") {
+        s.parse.replies++;
         if (typeof d.modelID === "string") {
           const model = d.providerID ? `${d.providerID}/${d.modelID}` : d.modelID;
           s.models[model] = (s.models[model] ?? 0) + 1;
@@ -84,10 +99,12 @@ function parseOpenCode(file: string): Session[] {
         for (const p of parts) {
           if (p.type === "tool" && p.tool === "bash" && typeof p.state?.input?.command === "string"
             && COMMITS.test(p.state.input.command) && typeof p.state.output === "string") {
+            s.parse.recognized++;
             s.commitShas.push(...commitShasIn(p.state.output));
           }
         }
       } else if (d.role === "user" && !s.parent && parts.some(p => p.type === "text" && !p.synthetic)) {
+        s.parse.recognized += parts.filter(p => p.type === "text" && !p.synthetic).length;
         s.humanPrompts++;
         event.humanPrompts = 1;
         const previous = lastAssistant.get(s.id);
@@ -101,7 +118,7 @@ function parseOpenCode(file: string): Session[] {
 
 export const opencodePlugin: SourcePlugin = {
   name: "opencode",
-  version: "1",
+  version: "3",
   defaultPaths: home => [join(home, ".local/share/opencode")],
   detect: path => { try { return statSync(databasePath(path)).isFile(); } catch { return false; } },
   read: readOpenCode,

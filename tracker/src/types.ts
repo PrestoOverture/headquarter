@@ -7,6 +7,8 @@ export type Tokens = { input: number; cacheRead: number; cacheWrite: number; out
 export type Role = "root" | "subagent" | "review" | "delegated";
 
 export type Session = {
+  /** Counts only: source records/rows, invalid JSON, handled records, assistant replies. */
+  parse: { records: number; unparsed: number; recognized: number; replies: number };
   events: { at: number; humanPrompts?: number; interrupts?: number; waitMs?: number; usage?: number; input?: number; cached?: number; output?: number; tokens?: Tokens }[];
   vendor: string;
   id: string;
@@ -60,6 +62,7 @@ export function commitShasIn(text: string): string[] {
 
 export function emptySession(vendor: string, id: string, file: string): Session {
   return {
+    parse: { records: 0, unparsed: 0, recognized: 0, replies: 0 },
     tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
     events: [], vendor, id, file, cwd: "", start: Infinity, end: -Infinity, times: [], models: {},
     headless: false, role: "root", humanPrompts: 0, interrupts: 0, waitMs: 0, commitShas: [], codexThreads: [],

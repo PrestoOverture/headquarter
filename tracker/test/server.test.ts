@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { collect } from "../src/collect";
 import { serve } from "../src/server";
 
-const empty = () => ({ tasks: [], meta: { generatedAt: Date.now(), sessions: {}, repos: 0, ci: false } });
+const empty = () => ({ tasks: [], meta: { generatedAt: Date.now(), sessions: {}, repos: 0, ci: false, sources: {} } });
 const portOf = (server: Server) => (server.address() as { port: number }).port;
 const urlOf = (server: Server) => `http://127.0.0.1:${portOf(server)}`;
 const close = (server: Server) => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

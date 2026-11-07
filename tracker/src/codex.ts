@@ -33,6 +33,7 @@ export function parseCodex(text: string, file: string): Session | null {
   const s = emptySession("codex", "", file);
   let previousUsage = { input: 0, cached: 0, output: 0 };
   let lastAssistant: number | null = null;
+  const settingsModels: Session["models"] = {};
   let attributed = false; // a task_started with turn_attribution was seen
   const oldPrompts: Session['events'] = [];
   const oldWaits: number[] = [];
@@ -41,18 +42,23 @@ export function parseCodex(text: string, file: string): Session | null {
 
   for (const line of text.split("\n")) {
     if (!line) continue;
+    s.parse.records++;
     let d: any;
     try {
       d = JSON.parse(line);
     } catch {
+      s.parse.unparsed++;
       continue;
     }
+    if (!d || typeof d !== "object") continue;
     const p = d.payload && typeof d.payload === "object" ? d.payload : {};
+    if (d.type === "response_item" && p.type === "message" && p.role === "assistant") s.parse.replies++;
     const t = touch(s, d.timestamp);
     const event: Session['events'][number] = { at: t ?? s.end };
     s.events.push(event);
 
     if (d.type === "session_meta") {
+      s.parse.recognized++;
       s.id = p.id ?? p.session_id ?? s.id;
       if (typeof p.cwd === "string") s.cwd = p.cwd;
       if (p.git?.repository_url) s.gitRemote = p.git.repository_url;
@@ -68,11 +74,16 @@ export function parseCodex(text: string, file: string): Session | null {
       continue;
     }
     if (d.type === "turn_context" && typeof p.model === "string") {
+      s.parse.recognized++;
       s.models[p.model] = (s.models[p.model] ?? 0) + 1;
       continue;
     }
     if (d.type === "event_msg") {
-      if (p.type === "token_count" && p.info?.total_token_usage) {
+      if (p.type === "thread_settings_applied" && typeof p.thread_settings?.model === "string") {
+        const model = p.thread_settings.model;
+        settingsModels[model] = (settingsModels[model] ?? 0) + 1;
+      } else if (p.type === "token_count" && p.info?.total_token_usage) {
+        s.parse.recognized++;
         const u = p.info.total_token_usage;
         const prev = previousUsage;
         event.input = Math.max(0, (u.input_tokens ?? 0) - prev.input);
@@ -92,6 +103,7 @@ export function parseCodex(text: string, file: string): Session | null {
         s.tokens = tokens;
         previousUsage = { input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0 };
       } else if (p.type === "task_started" && p.turn_attribution) {
+        s.parse.recognized++;
         attributed = true;
         if (HUMAN_TRIGGERS.has(p.turn_attribution.turn_trigger) && !s.headless) {
           s.humanPrompts++;
@@ -100,18 +112,23 @@ export function parseCodex(text: string, file: string): Session | null {
           lastAssistant = null;
         }
       } else if (p.type === "turn_aborted") {
+        s.parse.recognized++;
         if (!s.headless) { s.interrupts++; event.interrupts = 1; }
       } else if (p.type === "task_complete" && t !== null) {
+        s.parse.recognized++;
         lastAssistant = t;
       }
       continue;
     }
     if (d.type === "response_item") {
       if (p.type === "function_call" || p.type === "custom_tool_call") {
+        s.parse.recognized++;
         if (COMMITS.test(outputText(p.arguments ?? p.input))) commitCalls.add(p.call_id);
       } else if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
+        s.parse.recognized++;
         if (commitCalls.has(p.call_id)) s.commitShas.push(...commitShasIn(outputText(p.output)));
       } else if (p.type === "message" && t !== null) {
+        s.parse.recognized++;
         if (p.role === "assistant") lastAssistantOld = t;
         if (p.role === "user" && looksTyped(userText(p))) {
           oldPrompts.push(event);
@@ -127,6 +144,7 @@ export function parseCodex(text: string, file: string): Session | null {
     s.humanPrompts = oldPrompts.length;
     s.waitMs = oldWaits.reduce((a, b) => a + b, 0);
   }
+  if (Object.keys(s.models).length === 0) s.models = settingsModels;
   return finish(s);
 }
 
@@ -175,7 +193,7 @@ function hasRecords(path: string): boolean {
 
 export const codexPlugin: SourcePlugin = {
   name: "codex",
-  version: "1",
+  version: "3",
   defaultPaths: (home) => [join(home, ".codex/sessions")],
   detect: hasRecords,
   read: readCodex,

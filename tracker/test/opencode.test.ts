@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { buildTasks } from '../src/link';
 import { Repos } from '../src/git';
 import { plugins } from '../src/plugins';
+import { sourceDiagnostics } from '../src/diagnostics';
 
 const plugin = plugins.find(p => p.name === 'opencode')!;
 test('OpenCode fixture: usage, parents, genuine prompts, interrupts and bash output', () => {
@@ -41,6 +42,8 @@ test('OpenCode fixture: usage, parents, genuine prompts, interrupts and bash out
     expect(sessions).toHaveLength(2);
     const root = sessions.find(s => s.id === 'root')!;
     const child = sessions.find(s => s.id === 'child')!;
+    expect(root.parse).toEqual({ records: 13, unparsed: 0, recognized: 10, replies: 2 });
+    expect(child.parse).toEqual({ records: 3, unparsed: 0, recognized: 2, replies: 0 });
     expect(root.vendor).toBe('opencode');
     expect(root.cwd).toBe('/repo/low_code');
     expect(root.tokens).toEqual({ input: 11, cacheRead: 12, cacheWrite: 13, output: 29, reasoning: 15 });
@@ -61,6 +64,30 @@ test('OpenCode fixture: usage, parents, genuine prompts, interrupts and bash out
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('OpenCode counts malformed message/part rows and replies without usage', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tracker-oc-parse-'));
+  const db = new Database(join(dir, 'opencode.db'));
+  try {
+    db.exec(`CREATE TABLE session (id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT, message_id TEXT, time_created INTEGER, data TEXT);
+      INSERT INTO session VALUES ('s', '', NULL, 1767225600000, 1767225600000);
+      INSERT INTO message VALUES ('reply', 's', 1767225600000, '{"role":"assistant"}');
+      INSERT INTO message VALUES ('bad', 's', 1767225600000, '{broken');
+      INSERT INTO message VALUES ('unknown', 's', 1767225600000, '{"role":"future"}');
+      INSERT INTO part VALUES ('p', 'reply', 1767225600000, '{broken');`);
+    db.close();
+    const sessions = plugin.read(dir);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.parse).toEqual({ records: 5, unparsed: 2, recognized: 2, replies: 1 });
+    const report = sourceDiagnostics([], sessions);
+    expect(report.checks.unparsed.overall).toEqual({ k: 2, n: 5 });
+    expect(report.checks.zeroTokens.overall).toEqual({ k: 1, n: 1 });
+    expect(report.checks.noModel.overall).toEqual({ k: 1, n: 1 });
+    expect(report.checks.emptyCwd.overall).toEqual({ k: 1, n: 1 });
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('all detectors use file shape without parsing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tracker-detect-'));
   try {
@@ -69,4 +96,46 @@ test('all detectors use file shape without parsing', () => {
     writeFileSync(join(dir, 'opencode.db'), 'invalid sqlite');
     for (const plugin of plugins) expect(plugin.detect(dir)).toBe(true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('OpenCode coerces NULL directories before diagnostics, caching and task collection', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tracker-oc-null-directory-'));
+  const db = new Database(join(dir, 'opencode.db'));
+  try {
+    db.exec(`CREATE TABLE session (id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT, message_id TEXT, time_created INTEGER, data TEXT);
+      INSERT INTO session VALUES ('null-cwd', NULL, NULL, 1767225600000, 1767225600000);`);
+    db.close();
+    const { collect } = await import('../src/collect');
+    const { SessionCache } = await import('../src/cache');
+    for (let i = 0; i < 2; i++) {
+      const cache = new SessionCache(join(dir, 'cache'));
+      const sessions = cache.read(plugin, [dir]);
+      expect(sessions[0]!.cwd).toBe('');
+      expect(cache.reused).toBe(i);
+    }
+    const data = await collect({ dirs: { opencode: dir, claude: join(dir, 'missing'), codex: join(dir, 'missing') } }, () => {});
+    expect(data.tasks).toHaveLength(1);
+    expect(data.meta.sources.opencode!.checks.emptyCwd.overall).toEqual({ k: 1, n: 1 });
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('OpenCode empty database counts as one file yielding zero sessions, including cache hits', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tracker-oc-empty-file-'));
+  const db = new Database(join(dir, 'opencode.db'));
+  try {
+    db.exec(`CREATE TABLE session (id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT, message_id TEXT, time_created INTEGER, data TEXT);`);
+    db.close();
+    const { SessionCache } = await import('../src/cache');
+    for (let i = 0; i < 2; i++) {
+      const cache = new SessionCache(join(dir, 'cache'));
+      const sessions = cache.read(plugin, [dir]);
+      expect(sessions).toHaveLength(0);
+      expect(cache.reused).toBe(i);
+      expect(sourceDiagnostics([], sessions, cache.files.opencode).checks.unrecognized.overall).toEqual({ k: 1, n: 1 });
+    }
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

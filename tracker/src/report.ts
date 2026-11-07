@@ -13,7 +13,7 @@ export type Meta = { generatedAt: number; sessions: Record<string, number>; repo
 /** What the page needs of a task (no file paths beyond the working directory, no prompt text). */
 function slim(t: Task) {
   return {
-    id: t.id, kind: t.kind, size: t.size, combo: t.combo, vendor: t.vendor, headless: t.headless, empty: t.empty, repo: t.repo ?? null, start: t.start, end: t.end,
+    id: t.id, kind: t.kind, size: t.size, combo: t.combo, vendor: t.vendor, headless: t.headless, empty: t.empty, ongoing: !!t.ongoing, repo: t.repo ?? null, start: t.start, end: t.end,
     model: t.model ?? null, kinds: t.kinds, sessions: t.sessions, costUSD: t.costUSD, tokens: t.tokens,
     humanPrompts: t.humanPrompts, interrupts: t.interrupts, waitMs: t.waitMs, landed: t.landed, reworked: t.reworked,
     reverted: t.reverted, mature: t.mature, ci: t.ci ?? null,
@@ -43,7 +43,9 @@ export function terminalTable(tasks: Task[]): string {
 }
 
 export function dashboardData(tasks: Task[], meta: Meta) {
-  return { meta, tasks: tasks.map(slim) };
+  // Source diagnostics are additive collection/MCP metadata; keep the dashboard payload stable.
+  const { generatedAt, sessions, repos, ci } = meta;
+  return { meta: { generatedAt, sessions, repos, ci }, tasks: tasks.map(slim) };
 }
 
 export function html(tasks: Task[], meta: Meta, live = false): string {
@@ -120,8 +122,10 @@ td.l { text-align:left; white-space: normal; min-width: 240px; }
   <label><input type="checkbox" id="commits" checked> 只看有提交的任务</label>
   <label><input type="checkbox" id="headless"> 含无人值守（claude -p、codex exec）</label>
   <label><input type="checkbox" id="norepo"> 含不在仓库里的会话</label>
+  <label><input type="checkbox" id="ongoing"> 含进行中任务（最新记录距采集时间 30 分钟内）</label>
   <label><input type="checkbox" id="empty"> 含空任务（无回复）<span id="empty-count"></span></label>
 </div>
+<p id="ongoing-excluded" class="n"></p>
 <div class="cards" id="cards"></div>
 <h2>分组汇总</h2>
 <label><input type="checkbox" id="more"> 更多列（$ / CI 等）</label>
@@ -204,11 +208,12 @@ for (const [id, options] of [["kind", ["文档", "测试", "界面", "代码", "
   $(id).innerHTML = '<option value="">全部</option>' + options.map(v => '<option>' + esc(v) + '</option>').join("");
 }
 
-function filtered() {
+function filtered(includeOngoing = $("ongoing").checked) {
   const repo = $("repo").value, from = $("from").value, to = $("to").value;
   return DATA.tasks.filter((t) =>
     (!repo || t.repo === repo) &&
     (!$("agent").value || t.vendor === $("agent").value) &&
+    (includeOngoing || !t.ongoing) &&
     ($("empty").checked || !t.empty) &&
     (!$("kind").value || t.kind === $("kind").value) &&
     (!$("size").value || t.size === $("size").value) &&
@@ -323,6 +328,7 @@ function rate(k, n) {
 
 function render() {
   const ts = filtered();
+  $("ongoing-excluded").textContent = "已排除进行中任务：" + (filtered(true).length - ts.length);
   const rows = aggregate(ts, keyFn());
   if ($("group").value === "combo+month") rows.sort((a, b) => a.key.localeCompare(b.key));
   const all = aggregate(ts, () => "all")[0];
@@ -374,12 +380,12 @@ if (${live} && location.hash) {
     }
     $(id).value = value;
   }
-  for (const [key, id] of [["commits_only", "commits"], ["include_headless", "headless"], ["include_empty", "empty"]]) {
+  for (const [key, id] of [["commits_only", "commits"], ["include_headless", "headless"], ["include_empty", "empty"], ["include_ongoing", "ongoing"]]) {
     if (params.has(key)) $(id).checked = params.get(key) === "true";
   }
 }
 
-for (const id of ["repo", "agent", "kind", "size", "from", "to", "group", "commits", "headless", "norepo", "empty", "more", "bucket", "token-metric", "markers"]) $(id).addEventListener("input", render);
+for (const id of ["repo", "agent", "kind", "size", "from", "to", "group", "commits", "headless", "norepo", "empty", "ongoing", "more", "bucket", "token-metric", "markers"]) $(id).addEventListener("input", render);
 render();
 </script>
 </body>

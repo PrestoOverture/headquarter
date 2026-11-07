@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSyn
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { SourcePlugin } from "./plugins";
+import type { SourceFileRead } from "./diagnostics";
 import type { Session } from "./types";
 
 export function defaultCacheDir(home = homedir(), env = process.env): string {
@@ -57,12 +58,18 @@ function decode(value: any): any {
 export class SessionCache {
   parsed = 0;
   reused = 0;
+  readonly files: Record<string, SourceFileRead[]> = {};
 
-  constructor(private readonly dir?: string) {}
+  constructor(private readonly dir?: string, private readonly progress = () => {}) {}
 
   read(plugin: SourcePlugin, paths: string[]): Session[] {
     return paths.flatMap(path => plugin.read(path, (file, parse) => {
-      if (!this.dir) { this.parsed++; return parse(); }
+      const mtimeMs = statSync(file).mtimeMs;
+      const counted = (sessions: Session[]) => {
+        (this.files[plugin.name] ??= []).push({ mtimeMs, sessions: sessions.length });
+        return sessions;
+      };
+      if (!this.dir) { const sessions = parse(); this.parsed++; this.progress(); return counted(sessions); }
       const before = fingerprint(file, plugin);
       // Keep the spelling too: Session.file must match an uncached read of this path.
       const source = resolve(file);
@@ -73,17 +80,18 @@ export class SessionCache {
           && entry.source === source && entry.file === file && sameFingerprint(entry, before)
           && typeof entry.data === "string" && entry.checksum === hash(entry.data)) {
           const sessions = decode(JSON.parse(entry.data));
-          if (Array.isArray(sessions)) { this.reused++; return sessions; }
+          if (Array.isArray(sessions)) { this.reused++; this.progress(); return counted(sessions); }
         }
       } catch { /* Unreadable or corrupt entries are cache misses. */ }
 
-      this.parsed++;
       const sessions = parse();
+      this.parsed++;
+      this.progress();
       let temp: string | undefined;
       try {
         const after = fingerprint(file, plugin);
         // A live session may have grown while being parsed. Never cache that partial read.
-        if (!sameFingerprint(before, after)) return sessions;
+        if (!sameFingerprint(before, after)) return counted(sessions);
         const data = JSON.stringify(sessions, encode);
         mkdirSync(this.dir, { recursive: true, mode: 0o700 });
         temp = join(this.dir, `${randomUUID()}.tmp`);
@@ -92,7 +100,7 @@ export class SessionCache {
         renameSync(temp, entryPath);
       } catch { /* Cache failures must not prevent collecting fresh sessions. */ }
       finally { if (temp) { try { unlinkSync(temp); } catch {} } }
-      return sessions;
+      return counted(sessions);
     }));
   }
 }

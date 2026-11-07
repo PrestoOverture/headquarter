@@ -8,7 +8,7 @@ type Collection = Awaited<ReturnType<typeof collect>>;
 export async function serve(options: CollectOptions & { host?: string; port?: number },
   collectData: () => Promise<Collection> = () => collect(options),
   snapshot?: () => Collection) {
-  let current = await collectData();
+  let current = snapshot?.() ?? await collectData();
   let running: Promise<Collection> | undefined;
   function refresh() {
     if (!running) {

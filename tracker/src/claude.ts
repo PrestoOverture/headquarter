@@ -54,15 +54,19 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
 
   for (const line of text.split("\n")) {
     if (!line) continue;
+    s.parse.records++;
     let d: any;
     try {
       d = JSON.parse(line);
     } catch {
+      s.parse.unparsed++;
       continue;
     }
+    if (!d || typeof d !== "object") continue;
     if (!parent && d.isSidechain) continue; // old layout: subagent turns inline in the main file
     const t = touch(s, d.timestamp);
     if (d.type === "cost-state") {
+      s.parse.recognized++;
       if (typeof d.totalCostUSD === "number") {
         const key = typeof d.startTime === "number" ? d.startTime : 0;
         costByProcess.set(key, Math.max(costByProcess.get(key) ?? 0, d.totalCostUSD));
@@ -70,6 +74,7 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
       continue;
     }
     if (d.type !== "user" && d.type !== "assistant") continue;
+    s.parse.recognized++;
     if (!seen) {
       seen = true;
       if (!parent && typeof d.sessionId === "string") s.id = d.sessionId;
@@ -83,6 +88,7 @@ export function parseClaude(text: string, file: string, parent?: string): Sessio
     s.events.push(event);
 
     if (d.type === "assistant") {
+      s.parse.replies++;
       const usage = d.message?.usage;
       if (usage) event.usage = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
       const messageId = d.message?.id;
@@ -185,7 +191,7 @@ export function readClaude(root: string, readFile: SessionFileReader = (_file, p
 
 export const claudePlugin: SourcePlugin = {
   name: "claude",
-  version: "1",
+  version: "2",
   defaultPaths: (home) => [join(home, ".claude/projects")],
   detect: (path) => {
     try {
