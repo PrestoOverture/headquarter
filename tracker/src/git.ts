@@ -41,7 +41,7 @@ export const LOCKFILES = /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lo
 
 function loadCommits(git: GitCommands): Map<string, Commit> {
   const commits = new Map<string, Commit>();
-  const r = git.read(["log", "--all", "--numstat", "--no-renames", "--format=%x1e%H%x1f%P%x1f%ct%x1f%an%x1f%s%x1f%b%x1d"]);
+  const r = git.read(["log", "--exclude=refs/stash", "--all", "--numstat", "--no-renames", "--format=%x1e%H%x1f%P%x1f%ct%x1f%an%x1f%s%x1f%b%x1d"]);
   if (r.code !== 0) return commits;
   for (const rec of r.out.split("\x1e")) {
     if (!rec.trim()) continue;
