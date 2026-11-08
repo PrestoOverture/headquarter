@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { GitCache, type GitResult } from "./cache";
+import { WORK_REF_EXCLUDES } from "./git-refs";
 
 type Run = (cmd: string[], cwd: string) => GitResult;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -59,7 +60,7 @@ export class GitCommands {
       const cache = new GitCache(cacheDir);
       // Discover only directories that can affect these historical diffs. Scanning untracked
       // trees would walk ignored dependency/build folders on every refresh.
-      const pathsArgs = ["log", "--exclude=refs/stash", "--all", "--format=", "--name-only", "-z", "--no-renames"];
+      const pathsArgs = ["log", ...WORK_REF_EXCLUDES, "--all", "--format=", "--name-only", "-z", "--no-renames"];
       const paths = cache.read([key, "attribute-paths", hash(refContext), pathsArgs], () => run(["git", ...pathsArgs], top));
       if (paths.code !== 0) return;
       const dirs = new Set<string>(["."]);
